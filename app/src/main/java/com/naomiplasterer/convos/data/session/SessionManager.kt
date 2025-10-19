@@ -32,9 +32,13 @@ class SessionManager @Inject constructor(
         scope.launch {
             val inboxes = inboxDao.getAllInboxes()
             inboxes.collect { inboxList ->
-                if (inboxList.isNotEmpty() && _sessionState.value is SessionState.NoSession) {
+                if (inboxList.isEmpty() && _sessionState.value is SessionState.NoSession) {
+                    Timber.d("No existing inboxes found, creating new session")
+                    createSession("random")
+                } else if (inboxList.isNotEmpty() && _sessionState.value is SessionState.NoSession) {
                     val firstInbox = inboxList.first()
                     Timber.d("Found existing inbox, auto-selecting: ${firstInbox.inboxId}")
+                    switchSession(firstInbox.inboxId)
                 }
             }
         }

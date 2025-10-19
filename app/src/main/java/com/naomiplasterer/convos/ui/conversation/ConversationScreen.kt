@@ -1,6 +1,8 @@
 package com.naomiplasterer.convos.ui.conversation
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,7 +11,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,11 +32,13 @@ import java.util.*
 fun ConversationScreen(
     viewModel: ConversationViewModel = hiltViewModel(),
     onBackClick: () -> Unit = {},
-    onInfoClick: () -> Unit = {}
+    onInfoClick: () -> Unit = {},
+    onEditClick: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
+    var showMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.syncMessages()
@@ -56,8 +62,35 @@ fun ConversationScreen(
                             }
                         },
                         actions = {
-                            IconButton(onClick = onInfoClick) {
-                                Icon(Icons.Default.Info, contentDescription = "Info")
+                            Box {
+                                IconButton(onClick = { showMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = "More")
+                                }
+                                DropdownMenu(
+                                    expanded = showMenu,
+                                    onDismissRequest = { showMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Edit Conversation") },
+                                        onClick = {
+                                            showMenu = false
+                                            onEditClick()
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Edit, contentDescription = null)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Profile") },
+                                        onClick = {
+                                            showMenu = false
+                                            onInfoClick()
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Info, contentDescription = null)
+                                        }
+                                    )
+                                }
                             }
                         }
                     )
@@ -94,6 +127,7 @@ fun ConversationScreen(
                     onMessageTextChange = viewModel::updateMessageText,
                     onSendClick = viewModel::sendMessage,
                     isSending = isSending,
+                    onAddReaction = viewModel::addReaction,
                     modifier = Modifier.padding(paddingValues)
                 )
             }
@@ -123,7 +157,8 @@ private fun ConversationContent(
     onMessageTextChange: (String) -> Unit,
     onSendClick: () -> Unit,
     isSending: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAddReaction: (String, String) -> Unit = { _, _ -> }
 ) {
     Column(
         modifier = modifier.fillMaxSize()
@@ -144,7 +179,8 @@ private fun ConversationContent(
             ) { message ->
                 MessageBubble(
                     message = message,
-                    isOwn = message.senderInboxId == currentInboxId
+                    isOwn = message.senderInboxId == currentInboxId,
+                    onAddReaction = { emoji -> onAddReaction(message.id, emoji) }
                 )
                 Spacer(modifier = Modifier.height(Spacing.step2x))
             }
@@ -159,11 +195,13 @@ private fun ConversationContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: Message,
     isOwn: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onAddReaction: (String) -> Unit = {}
 ) {
     val text = when (val content = message.content) {
         is MessageContent.Text -> content.text
@@ -172,24 +210,34 @@ private fun MessageBubble(
         is MessageContent.Update -> content.details
     }
 
+    var showReactionPicker by remember { mutableStateOf(false) }
+
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = CornerRadius.medium,
-                topEnd = CornerRadius.medium,
-                bottomStart = if (isOwn) CornerRadius.medium else 4.dp,
-                bottomEnd = if (isOwn) 4.dp else CornerRadius.medium
-            ),
-            color = if (isOwn) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            },
-            modifier = Modifier.widthIn(max = 280.dp)
+        Column(
+            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start
         ) {
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = CornerRadius.medium,
+                    topEnd = CornerRadius.medium,
+                    bottomStart = if (isOwn) CornerRadius.medium else 4.dp,
+                    bottomEnd = if (isOwn) 4.dp else CornerRadius.medium
+                ),
+                color = if (isOwn) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { showReactionPicker = true }
+                    )
+            ) {
             Column(
                 modifier = Modifier.padding(Spacing.step3x)
             ) {
@@ -212,6 +260,36 @@ private fun MessageBubble(
                         MaterialTheme.colorScheme.onSurfaceVariant
                     }
                 )
+            }
+        }
+
+            if (showReactionPicker) {
+                Card(
+                    modifier = Modifier.padding(top = Spacing.step2x),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(Spacing.step2x),
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.step2x)
+                    ) {
+                        val commonEmojis = listOf("👍", "❤️", "😂", "😮", "😢", "🎉")
+                        commonEmojis.forEach { emoji ->
+                            TextButton(
+                                onClick = {
+                                    onAddReaction(emoji)
+                                    showReactionPicker = false
+                                }
+                            ) {
+                                Text(
+                                    text = emoji,
+                                    style = MaterialTheme.typography.headlineSmall
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.naomiplasterer.convos.ui.conversations
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.naomiplasterer.convos.data.repository.ConversationRepository
@@ -8,6 +9,7 @@ import com.naomiplasterer.convos.data.session.SessionState
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.ConsentState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +21,8 @@ import javax.inject.Inject
 @HiltViewModel
 class ConversationsViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<ConversationsUiState>(ConversationsUiState.Loading)
@@ -27,6 +30,13 @@ class ConversationsViewModel @Inject constructor(
 
     private val _selectedConversationId = MutableStateFlow<String?>(null)
     val selectedConversationId: StateFlow<String?> = _selectedConversationId.asStateFlow()
+
+    private val prefs = context.getSharedPreferences("convos_prefs", Context.MODE_PRIVATE)
+
+    private val _hasCreatedMoreThanOneConvo = MutableStateFlow(
+        prefs.getBoolean("hasCreatedMoreThanOneConvo", false)
+    )
+    val hasCreatedMoreThanOneConvo: StateFlow<Boolean> = _hasCreatedMoreThanOneConvo.asStateFlow()
 
     init {
         observeSession()
@@ -57,6 +67,11 @@ class ConversationsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 conversationRepository.getConversations(inboxId).collectLatest { conversations ->
+                    if (conversations.size > 1 && !_hasCreatedMoreThanOneConvo.value) {
+                        _hasCreatedMoreThanOneConvo.value = true
+                        prefs.edit().putBoolean("hasCreatedMoreThanOneConvo", true).apply()
+                    }
+
                     if (conversations.isEmpty()) {
                         _uiState.value = ConversationsUiState.Empty
                     } else {

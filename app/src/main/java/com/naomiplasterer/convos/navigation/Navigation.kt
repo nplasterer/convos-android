@@ -14,12 +14,19 @@ import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import com.naomiplasterer.convos.ui.conversations.ConversationsScreen
 import com.naomiplasterer.convos.ui.conversation.ConversationScreen
+import com.naomiplasterer.convos.ui.conversationedit.ConversationEditScreen
+import com.naomiplasterer.convos.ui.newconversation.NewConversationMode
+import com.naomiplasterer.convos.ui.newconversation.NewConversationScreen
+import com.naomiplasterer.convos.ui.profile.ProfileScreen
 import com.naomiplasterer.convos.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
     object Conversations : Screen("conversations")
     object ConversationDetail : Screen("conversation/{conversationId}") {
         fun createRoute(conversationId: String) = "conversation/$conversationId"
+    }
+    object ConversationEdit : Screen("conversation/{conversationId}/edit") {
+        fun createRoute(conversationId: String) = "conversation/$conversationId/edit"
     }
     object NewConversation : Screen("new_conversation")
     object Settings : Screen("settings")
@@ -42,7 +49,10 @@ fun ConvosNavigation(
                     navController.navigate(Screen.ConversationDetail.createRoute(conversationId))
                 },
                 onNewConversationClick = {
-                    navController.navigate(Screen.NewConversation.route)
+                    navController.navigate("${Screen.NewConversation.route}?mode=create")
+                },
+                onScanConversationClick = {
+                    navController.navigate("${Screen.NewConversation.route}?mode=scan")
                 },
                 onSettingsClick = {
                     navController.navigate(Screen.Settings.route)
@@ -59,22 +69,72 @@ fun ConvosNavigation(
                 navDeepLink { uriPattern = "convos://conversation/{conversationId}" },
                 navDeepLink { uriPattern = "https://convos.app/conversation/{conversationId}" }
             )
-        ) {
+        ) { backStackEntry ->
+            val conversationId = backStackEntry.arguments?.getString("conversationId") ?: return@composable
             ConversationScreen(
                 onBackClick = { navController.popBackStack() },
-                onInfoClick = { }
+                onInfoClick = {
+                    navController.navigate(Screen.Profile.createRoute(conversationId))
+                },
+                onEditClick = {
+                    navController.navigate(Screen.ConversationEdit.createRoute(conversationId))
+                }
             )
         }
 
         composable(
-            route = Screen.NewConversation.route,
+            route = "${Screen.NewConversation.route}?mode={mode}",
+            arguments = listOf(
+                navArgument("mode") {
+                    type = NavType.StringType
+                    defaultValue = "scan"
+                }
+            ),
             deepLinks = listOf(
                 navDeepLink { uriPattern = "convos://i/{inviteCode}" },
                 navDeepLink { uriPattern = "https://convos.app/i/{inviteCode}" }
             )
+        ) { backStackEntry ->
+            val modeString = backStackEntry.arguments?.getString("mode") ?: "scan"
+            val mode = when (modeString) {
+                "create" -> NewConversationMode.CREATE
+                "scan" -> NewConversationMode.SCAN
+                "manual" -> NewConversationMode.MANUAL
+                else -> NewConversationMode.SCAN
+            }
+
+            NewConversationScreen(
+                onBackClick = { navController.popBackStack() },
+                onConversationJoined = { conversationId ->
+                    navController.navigate(Screen.ConversationDetail.createRoute(conversationId)) {
+                        popUpTo(Screen.Conversations.route)
+                    }
+                },
+                initialMode = mode
+            )
+        }
+
+        composable(
+            route = Screen.ConversationEdit.route,
+            arguments = listOf(
+                navArgument("conversationId") { type = NavType.StringType }
+            )
         ) {
-            NewConversationPlaceholder(
-                onBackClick = { navController.popBackStack() }
+            ConversationEditScreen(
+                onBackClick = { navController.popBackStack() },
+                onSaveClick = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.Profile.route,
+            arguments = listOf(
+                navArgument("conversationId") { type = NavType.StringType }
+            )
+        ) {
+            ProfileScreen(
+                onBackClick = { navController.popBackStack() },
+                onSaveClick = { navController.popBackStack() }
             )
         }
 
@@ -86,64 +146,3 @@ fun ConvosNavigation(
     }
 }
 
-@Composable
-private fun ConversationDetailPlaceholder(
-    conversationId: String,
-    onBackClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("Conversation Detail")
-            Text("ID: $conversationId")
-            Button(onClick = onBackClick) {
-                Text("Back")
-            }
-        }
-    }
-}
-
-@Composable
-private fun NewConversationPlaceholder(
-    onBackClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("New Conversation")
-            Button(onClick = onBackClick) {
-                Text("Back")
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsPlaceholder(
-    onBackClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text("Settings")
-            Button(onClick = onBackClick) {
-                Text("Back")
-            }
-        }
-    }
-}

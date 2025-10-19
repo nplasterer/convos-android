@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.naomiplasterer.convos.domain.model.Conversation
@@ -66,7 +67,7 @@ fun ConversationListItem(
             Row(
                 modifier = Modifier
                     .clickable(onClick = onClick)
-                    .padding(Spacing.step4x)
+                    .padding(horizontal = Spacing.step6x, vertical = Spacing.step3x)
                     .fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(Spacing.step3x),
                 verticalAlignment = Alignment.CenterVertically
@@ -77,54 +78,63 @@ fun ConversationListItem(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(Spacing.stepX)
                 ) {
+                    Text(
+                        text = conversation.name ?: "Unnamed Conversation",
+                        style = if (conversation.isUnread) {
+                            MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        } else {
+                            MaterialTheme.typography.titleMedium
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = conversation.name ?: "Unnamed Conversation",
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-
                         if (conversation.lastMessageAt != null) {
                             Text(
                                 text = formatTimestamp(conversation.lastMessageAt),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (conversation.isUnread) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+
+                        if (conversation.lastMessagePreview != null) {
+                            Text(text = "•", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = conversation.lastMessagePreview,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (conversation.isUnread) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        if (conversation.isUnread) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.onSurface)
                             )
                         }
                     }
-
-                    Text(
-                        text = conversation.lastMessagePreview ?: "No messages yet",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (conversation.isUnread) {
-                            MaterialTheme.colorScheme.onSurface
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                if (conversation.isUnread) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
                 }
             }
         }
     }
-
-    HorizontalDivider()
 }
 
 @Composable

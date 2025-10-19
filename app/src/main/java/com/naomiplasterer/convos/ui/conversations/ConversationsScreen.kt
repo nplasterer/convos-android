@@ -4,7 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -24,9 +25,11 @@ fun ConversationsScreen(
     viewModel: ConversationsViewModel = hiltViewModel(),
     onConversationClick: (String) -> Unit = {},
     onNewConversationClick: () -> Unit = {},
+    onScanConversationClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val hasCreatedMoreThanOneConvo by viewModel.hasCreatedMoreThanOneConvo.collectAsState()
 
     Scaffold(
         topBar = {
@@ -39,13 +42,45 @@ fun ConversationsScreen(
                 }
             )
         },
-        floatingActionButton = {
+        bottomBar = {
             if (uiState is ConversationsUiState.Success || uiState is ConversationsUiState.Empty) {
-                FloatingActionButton(
-                    onClick = onNewConversationClick,
-                    containerColor = MaterialTheme.colorScheme.primary
+                BottomAppBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 0.dp
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "New Conversation")
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    IconButton(onClick = onScanConversationClick) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.QrCodeScanner,
+                                contentDescription = "Scan"
+                            )
+                            Text(
+                                text = "Scan",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
+
+                    IconButton(onClick = onNewConversationClick) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Create,
+                                contentDescription = "Compose"
+                            )
+                            Text(
+                                text = "Compose",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -63,11 +98,19 @@ fun ConversationsScreen(
                     NoSessionState()
                 }
                 is ConversationsUiState.Empty -> {
-                    EmptyState()
+                    ConversationsListEmptyCTA(
+                        onStartConvo = onNewConversationClick,
+                        onJoinConvo = onScanConversationClick
+                    )
                 }
                 is ConversationsUiState.Success -> {
+                    val shouldShowCTA = state.conversations.size == 1 && !hasCreatedMoreThanOneConvo
+
                     ConversationsList(
                         conversations = state.conversations,
+                        showCTA = shouldShowCTA,
+                        onStartConvo = onNewConversationClick,
+                        onJoinConvo = onScanConversationClick,
                         onConversationClick = {
                             viewModel.selectConversation(it.id)
                             onConversationClick(it.id)
@@ -77,8 +120,13 @@ fun ConversationsScreen(
                     )
                 }
                 is ConversationsUiState.Syncing -> {
+                    val shouldShowCTA = state.conversations.size == 1 && !hasCreatedMoreThanOneConvo
+
                     ConversationsList(
                         conversations = state.conversations,
+                        showCTA = shouldShowCTA,
+                        onStartConvo = onNewConversationClick,
+                        onJoinConvo = onScanConversationClick,
                         onConversationClick = {
                             viewModel.selectConversation(it.id)
                             onConversationClick(it.id)
@@ -105,6 +153,9 @@ private fun ConversationsList(
     onConversationClick: (Conversation) -> Unit,
     onDeleteClick: (Conversation) -> Unit,
     onRefresh: () -> Unit,
+    showCTA: Boolean = false,
+    onStartConvo: () -> Unit = {},
+    onJoinConvo: () -> Unit = {},
     isSyncing: Boolean = false
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -114,8 +165,17 @@ private fun ConversationsList(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(vertical = Spacing.step2x)
+            contentPadding = PaddingValues(vertical = if (showCTA) 0.dp else Spacing.step2x)
         ) {
+            if (showCTA) {
+                item {
+                    ConversationsListEmptyCTA(
+                        onStartConvo = onStartConvo,
+                        onJoinConvo = onJoinConvo
+                    )
+                }
+            }
+
             items(
                 items = conversations,
                 key = { it.id }
@@ -165,31 +225,6 @@ private fun NoSessionState() {
     }
 }
 
-@Composable
-private fun EmptyState() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.step4x),
-            modifier = Modifier.padding(Spacing.step6x)
-        ) {
-            Text(
-                text = "No Conversations",
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "Tap the + button to start a new conversation",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
-    }
-}
 
 @Composable
 private fun ErrorState(

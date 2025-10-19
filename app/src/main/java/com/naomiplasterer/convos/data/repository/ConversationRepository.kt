@@ -105,6 +105,16 @@ class ConversationRepository @Inject constructor(
         }
     }
 
+    suspend fun updateConversationDetails(
+        inboxId: String,
+        conversationId: String,
+        name: String?,
+        description: String?,
+        imageUrl: String?
+    ) {
+        updateMetadata(conversationId, name, description, imageUrl)
+    }
+
     suspend fun deleteConversation(conversationId: String) {
         try {
             val conversation = conversationDao.getConversationSync(conversationId)

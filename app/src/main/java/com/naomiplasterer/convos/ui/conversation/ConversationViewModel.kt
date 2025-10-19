@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.naomiplasterer.convos.data.repository.ConversationRepository
 import com.naomiplasterer.convos.data.repository.MessageRepository
+import com.naomiplasterer.convos.data.repository.ReactionRepository
 import com.naomiplasterer.convos.data.session.SessionManager
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.Message
@@ -22,6 +23,7 @@ class ConversationViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val conversationRepository: ConversationRepository,
     private val messageRepository: MessageRepository,
+    private val reactionRepository: ReactionRepository,
     private val sessionManager: SessionManager
 ) : ViewModel() {
 
@@ -130,6 +132,38 @@ class ConversationViewModel @Inject constructor(
     fun markAsRead() {
         viewModelScope.launch {
             conversationRepository.updateUnread(conversationId, false)
+        }
+    }
+
+    fun addReaction(messageId: String, emoji: String) {
+        viewModelScope.launch {
+            val inboxId = sessionManager.getCurrentInboxId() ?: return@launch
+
+            reactionRepository.addReaction(
+                messageId = messageId,
+                senderInboxId = inboxId,
+                emoji = emoji
+            ).fold(
+                onSuccess = {
+                    Timber.d("Reaction added successfully")
+                },
+                onFailure = { error ->
+                    Timber.e(error, "Failed to add reaction")
+                }
+            )
+        }
+    }
+
+    fun removeReaction(reactionId: String) {
+        viewModelScope.launch {
+            reactionRepository.removeReaction(reactionId).fold(
+                onSuccess = {
+                    Timber.d("Reaction removed successfully")
+                },
+                onFailure = { error ->
+                    Timber.e(error, "Failed to remove reaction")
+                }
+            )
         }
     }
 }
