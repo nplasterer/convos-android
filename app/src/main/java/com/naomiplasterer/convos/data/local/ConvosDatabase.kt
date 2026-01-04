@@ -11,11 +11,9 @@ import com.naomiplasterer.convos.data.local.entity.*
         ConversationEntity::class,
         MessageEntity::class,
         MemberEntity::class,
-        ProfileEntity::class,
-        ReactionEntity::class,
-        InviteEntity::class
+        MemberProfileEntity::class
     ],
-    version = 1,
+    version = 4,
     exportSchema = true
 )
 abstract class ConvosDatabase : RoomDatabase() {
@@ -23,6 +21,5 @@ abstract class ConvosDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
     abstract fun memberDao(): MemberDao
-    abstract fun profileDao(): ProfileDao
-    abstract fun reactionDao(): ReactionDao
+    abstract fun memberProfileDao(): MemberProfileDao
 }

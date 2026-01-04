@@ -11,9 +11,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.xmtp.android.library.XMTPEnvironment
-import timber.log.Timber
+import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "SessionManager"
 
 @Singleton
 class SessionManager @Inject constructor(
@@ -30,23 +32,78 @@ class SessionManager @Inject constructor(
 
     init {
         scope.launch {
-            val inboxes = inboxDao.getAllInboxes()
-            inboxes.collect { inboxList ->
-                if (inboxList.isEmpty() && _sessionState.value is SessionState.NoSession) {
-                    Timber.d("No existing inboxes found, creating new session")
-                    createSession("random")
-                } else if (inboxList.isNotEmpty() && _sessionState.value is SessionState.NoSession) {
-                    val firstInbox = inboxList.first()
-                    Timber.d("Found existing inbox, auto-selecting: ${firstInbox.inboxId}")
-                    switchSession(firstInbox.inboxId)
-                }
+            checkForExistingInboxes()
+        }
+    }
+
+    /**
+     * Check if there are existing inboxes but don't load clients yet.
+     * Clients will be lazily loaded when needed (e.g., when viewing conversations).
+     */
+    private suspend fun checkForExistingInboxes() {
+        try {
+            val inboxList = inboxDao.getAllInboxesList()
+            Log.d(TAG, "Found ${inboxList.size} existing inboxes")
+
+            if (inboxList.isEmpty()) {
+                Log.d(TAG, "No existing inboxes found")
+                _sessionState.value = SessionState.NoSession
+            } else {
+                // Set first inbox as active but don't load clients yet
+                val firstInbox = inboxList.first()
+                _sessionState.value = SessionState.Active(
+                    inboxId = firstInbox.inboxId,
+                    address = firstInbox.address
+                )
+                Log.d(TAG, "Set active inbox: ${firstInbox.inboxId} (client will be loaded when needed)")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check for existing inboxes", e)
+            _sessionState.value = SessionState.Error(e.message ?: "Failed to check inboxes")
+        }
+    }
+
+    /**
+     * Ensure client is loaded for the given inbox ID.
+     * Loads lazily if not already loaded.
+     */
+    suspend fun ensureClientLoaded(inboxId: String): Result<Unit> {
+        return try {
+            // Check if client is already loaded
+            if (xmtpClientManager.getClient(inboxId) != null) {
+                Log.d(TAG, "Client already loaded for inbox: $inboxId")
+                return Result.success(Unit)
+            }
+
+            // Load the client
+            val inbox = inboxDao.getInbox(inboxId)
+                ?: return Result.failure(IllegalStateException("Inbox not found: $inboxId"))
+
+            Log.d(TAG, "Lazy loading client for inbox: $inboxId")
+            val clientResult = xmtpClientManager.createClient(
+                address = inbox.address,
+                inboxId = inbox.inboxId
+            )
+
+            clientResult.fold(
+                onSuccess = {
+                    Log.d(TAG, "Client loaded successfully for inbox: $inboxId")
+                    Result.success(Unit)
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Failed to load client for inbox: $inboxId", error)
+                    Result.failure(error)
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception loading client for inbox: $inboxId", e)
+            Result.failure(e)
         }
     }
 
     suspend fun createSession(
         address: String,
-        environment: XMTPEnvironment = XMTPEnvironment.DEV
+        environment: XMTPEnvironment = XMTPEnvironment.PRODUCTION
     ): Result<String> {
         _sessionState.value = SessionState.Creating
 
@@ -57,6 +114,7 @@ class SessionManager @Inject constructor(
                 onSuccess = { client ->
                     val inbox = InboxEntity(
                         inboxId = client.inboxId,
+                        clientId = client.installationId,
                         address = address,
                         createdAt = System.currentTimeMillis()
                     )
@@ -67,18 +125,18 @@ class SessionManager @Inject constructor(
                         address = address
                     )
 
-                    Timber.d("Session created for inbox: ${client.inboxId}")
+                    Log.d(TAG, "Session created for inbox: ${client.inboxId}")
                     Result.success(client.inboxId)
                 },
                 onFailure = { error ->
                     _sessionState.value = SessionState.Error(error.message ?: "Unknown error")
-                    Timber.e(error, "Failed to create session")
+                    Log.e(TAG, "Failed to create session", error)
                     Result.failure(error)
                 }
             )
         } catch (e: Exception) {
             _sessionState.value = SessionState.Error(e.message ?: "Unknown error")
-            Timber.e(e, "Exception creating session")
+            Log.e(TAG, "Exception creating session", e)
             Result.failure(e)
         }
     }
@@ -107,10 +165,10 @@ class SessionManager @Inject constructor(
                 address = inbox.address
             )
 
-            Timber.d("Switched to session: $inboxId")
+            Log.d(TAG, "Switched to session: $inboxId")
             Result.success(Unit)
         } catch (e: Exception) {
-            Timber.e(e, "Failed to switch session")
+            Log.e(TAG, "Failed to switch session", e)
             Result.failure(e)
         }
     }
@@ -126,10 +184,10 @@ class SessionManager @Inject constructor(
                     _sessionState.value = SessionState.NoSession
                 }
 
-                Timber.d("Deleted session: $inboxId")
+                Log.d(TAG, "Deleted session: $inboxId")
             }
         } catch (e: Exception) {
-            Timber.e(e, "Failed to delete session")
+            Log.e(TAG, "Failed to delete session", e)
         }
     }
 
@@ -140,9 +198,9 @@ class SessionManager @Inject constructor(
             _sessionState.value = SessionState.NoSession
             _activeConversationId.value = null
 
-            Timber.d("Deleted all sessions")
+            Log.d(TAG, "Deleted all sessions")
         } catch (e: Exception) {
-            Timber.e(e, "Failed to delete all sessions")
+            Log.e(TAG, "Failed to delete all sessions", e)
         }
     }
 
@@ -156,6 +214,10 @@ class SessionManager @Inject constructor(
 
     fun isSessionActive(): Boolean {
         return _sessionState.value is SessionState.Active
+    }
+
+    suspend fun getAllInboxIds(): List<String> {
+        return inboxDao.getAllInboxesList().map { it.inboxId }
     }
 }
 

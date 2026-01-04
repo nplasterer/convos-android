@@ -10,6 +10,7 @@ fun MessageEntity.toDomain(): Message {
         "text" -> MessageContent.Text(this.content)
         "emoji" -> MessageContent.Emoji(this.content)
         "attachment" -> MessageContent.Attachment(this.content)
+        "update" -> MessageContent.Update(updateType = "membership", details = this.content)
         else -> MessageContent.Text(this.content)
     }
 
@@ -28,8 +29,7 @@ fun MessageEntity.toDomain(): Message {
         content = content,
         status = status,
         sentAt = sentAt,
-        deliveredAt = deliveredAt,
-        replyToId = replyToId
+        deliveredAt = deliveredAt
     )
 }
 
@@ -45,7 +45,7 @@ fun Message.toEntity(): MessageEntity {
         is MessageContent.Text -> content.text
         is MessageContent.Emoji -> content.emoji
         is MessageContent.Attachment -> content.url
-        is MessageContent.Update -> content.details
+        is MessageContent.Update -> content.details  // Store the details string
     }
 
     val statusString = when (status) {
@@ -63,7 +63,6 @@ fun Message.toEntity(): MessageEntity {
         content = contentString,
         status = statusString,
         sentAt = sentAt,
-        deliveredAt = deliveredAt,
-        replyToId = replyToId
+        deliveredAt = deliveredAt
     )
 }

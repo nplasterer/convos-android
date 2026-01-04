@@ -67,7 +67,7 @@ private val DarkColorScheme = darkColorScheme(
 @Composable
 fun ConvosTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false,
+    dynamicColor: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

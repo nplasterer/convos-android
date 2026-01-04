@@ -15,9 +15,9 @@ import androidx.navigation.navDeepLink
 import com.naomiplasterer.convos.ui.conversations.ConversationsScreen
 import com.naomiplasterer.convos.ui.conversation.ConversationScreen
 import com.naomiplasterer.convos.ui.conversationedit.ConversationEditScreen
+import com.naomiplasterer.convos.ui.myinfo.MyInfoScreen
 import com.naomiplasterer.convos.ui.newconversation.NewConversationMode
 import com.naomiplasterer.convos.ui.newconversation.NewConversationScreen
-import com.naomiplasterer.convos.ui.profile.ProfileScreen
 import com.naomiplasterer.convos.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
@@ -30,9 +30,7 @@ sealed class Screen(val route: String) {
     }
     object NewConversation : Screen("new_conversation")
     object Settings : Screen("settings")
-    object Profile : Screen("profile/{conversationId}") {
-        fun createRoute(conversationId: String) = "profile/$conversationId"
-    }
+    object MyInfo : Screen("myinfo")
 }
 
 @Composable
@@ -49,7 +47,10 @@ fun ConvosNavigation(
                     navController.navigate(Screen.ConversationDetail.createRoute(conversationId))
                 },
                 onNewConversationClick = {
-                    navController.navigate("${Screen.NewConversation.route}?mode=create")
+                    // Navigate to create mode for starting a new conversation
+                    navController.navigate("${Screen.NewConversation.route}?mode=create") {
+                        launchSingleTop = true
+                    }
                 },
                 onScanConversationClick = {
                     navController.navigate("${Screen.NewConversation.route}?mode=scan")
@@ -73,9 +74,6 @@ fun ConvosNavigation(
             val conversationId = backStackEntry.arguments?.getString("conversationId") ?: return@composable
             ConversationScreen(
                 onBackClick = { navController.popBackStack() },
-                onInfoClick = {
-                    navController.navigate(Screen.Profile.createRoute(conversationId))
-                },
                 onEditClick = {
                     navController.navigate(Screen.ConversationEdit.createRoute(conversationId))
                 }
@@ -83,11 +81,16 @@ fun ConvosNavigation(
         }
 
         composable(
-            route = "${Screen.NewConversation.route}?mode={mode}",
+            route = "${Screen.NewConversation.route}?mode={mode}&inviteCode={inviteCode}",
             arguments = listOf(
                 navArgument("mode") {
                     type = NavType.StringType
                     defaultValue = "scan"
+                },
+                navArgument("inviteCode") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 }
             ),
             deepLinks = listOf(
@@ -96,6 +99,8 @@ fun ConvosNavigation(
             )
         ) { backStackEntry ->
             val modeString = backStackEntry.arguments?.getString("mode") ?: "scan"
+            val inviteCode = backStackEntry.arguments?.getString("inviteCode")
+
             val mode = when (modeString) {
                 "create" -> NewConversationMode.CREATE
                 "scan" -> NewConversationMode.SCAN
@@ -107,10 +112,14 @@ fun ConvosNavigation(
                 onBackClick = { navController.popBackStack() },
                 onConversationJoined = { conversationId ->
                     navController.navigate(Screen.ConversationDetail.createRoute(conversationId)) {
-                        popUpTo(Screen.Conversations.route)
+                        popUpTo(Screen.Conversations.route) {
+                            inclusive = false
+                        }
+                        launchSingleTop = true
                     }
                 },
-                initialMode = mode
+                initialMode = mode,
+                initialInviteCode = inviteCode
             )
         }
 
@@ -126,20 +135,15 @@ fun ConvosNavigation(
             )
         }
 
-        composable(
-            route = Screen.Profile.route,
-            arguments = listOf(
-                navArgument("conversationId") { type = NavType.StringType }
-            )
-        ) {
-            ProfileScreen(
+        composable(Screen.Settings.route) {
+            SettingsScreen(
                 onBackClick = { navController.popBackStack() },
-                onSaveClick = { navController.popBackStack() }
+                onMyInfoClick = { navController.navigate(Screen.MyInfo.route) }
             )
         }
 
-        composable(Screen.Settings.route) {
-            SettingsScreen(
+        composable(Screen.MyInfo.route) {
+            MyInfoScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }

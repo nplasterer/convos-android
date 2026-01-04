@@ -2,7 +2,9 @@ package com.naomiplasterer.convos
 
 import android.app.Application
 import dagger.hilt.android.HiltAndroidApp
-import timber.log.Timber
+import android.util.Log
+
+private const val TAG = "ConvosApplication"
 
 @HiltAndroidApp
 class ConvosApplication : Application() {
@@ -10,10 +12,6 @@ class ConvosApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        if (BuildConfig.DEBUG) {
-            Timber.plant(Timber.DebugTree())
-        }
-
-        Timber.d("Convos Application started")
+        Log.d(TAG, "Convos Application started")
     }
 }

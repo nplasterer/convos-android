@@ -6,10 +6,12 @@ import android.util.Base64
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
-import timber.log.Timber
+import android.util.Log
 import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "EncryptionKeyManager"
 
 @Singleton
 class EncryptionKeyManager @Inject constructor(
@@ -32,10 +34,10 @@ class EncryptionKeyManager @Inject constructor(
         val existingKey = sharedPreferences.getString(keyName, null)
 
         return if (existingKey != null) {
-            Timber.d("Retrieved existing encryption key for address: $address")
+            Log.d(TAG, "Retrieved existing encryption key for address: $address")
             Base64.decode(existingKey, Base64.DEFAULT)
         } else {
-            Timber.d("Generating new encryption key for address: $address")
+            Log.d(TAG, "Generating new encryption key for address: $address")
             val newKey = generateEncryptionKey()
             val encodedKey = Base64.encodeToString(newKey, Base64.DEFAULT)
             sharedPreferences.edit().putString(keyName, encodedKey).apply()
@@ -52,11 +54,11 @@ class EncryptionKeyManager @Inject constructor(
     fun clearKey(address: String) {
         val keyName = "key_$address"
         sharedPreferences.edit().remove(keyName).apply()
-        Timber.d("Cleared encryption key for address: $address")
+        Log.d(TAG, "Cleared encryption key for address: $address")
     }
 
     fun clearAllKeys() {
         sharedPreferences.edit().clear().apply()
-        Timber.d("Cleared all encryption keys")
+        Log.d(TAG, "Cleared all encryption keys")
     }
 }

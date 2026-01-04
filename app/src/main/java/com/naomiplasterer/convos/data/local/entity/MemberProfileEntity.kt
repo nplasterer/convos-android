@@ -1,11 +1,12 @@
 package com.naomiplasterer.convos.data.local.entity
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
 import androidx.room.ForeignKey
+import androidx.room.Index
 
 @Entity(
-    tableName = "invites",
+    tableName = "member_profiles",
+    primaryKeys = ["conversationId", "inboxId"],
     foreignKeys = [
         ForeignKey(
             entity = ConversationEntity::class,
@@ -13,11 +14,16 @@ import androidx.room.ForeignKey
             childColumns = ["conversationId"],
             onDelete = ForeignKey.CASCADE
         )
+    ],
+    indices = [
+        Index(value = ["conversationId"]),
+        Index(value = ["inboxId"]),
+        Index(value = ["conversationId", "inboxId"], unique = true)
     ]
 )
-data class InviteEntity(
-    @PrimaryKey
-    val inviteCode: String,
+data class MemberProfileEntity(
     val conversationId: String,
-    val createdAt: Long
+    val inboxId: String,
+    val name: String?,
+    val avatar: String?
 )

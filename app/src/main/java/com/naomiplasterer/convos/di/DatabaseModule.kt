@@ -42,8 +42,5 @@ object DatabaseModule {
     fun provideMemberDao(database: ConvosDatabase): MemberDao = database.memberDao()
 
     @Provides
-    fun provideProfileDao(database: ConvosDatabase): ProfileDao = database.profileDao()
-
-    @Provides
-    fun provideReactionDao(database: ConvosDatabase): ReactionDao = database.reactionDao()
+    fun provideMemberProfileDao(database: ConvosDatabase): MemberProfileDao = database.memberProfileDao()
 }

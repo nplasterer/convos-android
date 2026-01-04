@@ -5,8 +5,17 @@ data class Member(
     val addresses: List<String>,
     val permissionLevel: PermissionLevel,
     val consentState: ConsentState,
-    val addedAt: Long
-)
+    val addedAt: Long,
+    val name: String? = null,
+    val imageUrl: String? = null,
+    val isCurrentUser: Boolean = false
+) {
+    val displayName: String
+        get() = name ?: "Somebody"
+
+    val isAdmin: Boolean
+        get() = permissionLevel == PermissionLevel.ADMIN || permissionLevel == PermissionLevel.SUPER_ADMIN
+}
 
 enum class PermissionLevel {
     MEMBER,

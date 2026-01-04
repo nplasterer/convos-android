@@ -7,9 +7,7 @@ data class Message(
     val content: MessageContent,
     val status: MessageStatus,
     val sentAt: Long,
-    val deliveredAt: Long?,
-    val replyToId: String? = null,
-    val reactions: List<Reaction> = emptyList()
+    val deliveredAt: Long?
 )
 
 sealed class MessageContent {

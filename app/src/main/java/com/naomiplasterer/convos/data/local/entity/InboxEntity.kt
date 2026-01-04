@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 data class InboxEntity(
     @PrimaryKey
     val inboxId: String,
+    val clientId: String,
     val address: String,
     val createdAt: Long
 )

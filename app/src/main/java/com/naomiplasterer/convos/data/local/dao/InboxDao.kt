@@ -10,6 +10,9 @@ interface InboxDao {
     @Query("SELECT * FROM inboxes ORDER BY createdAt DESC")
     fun getAllInboxes(): Flow<List<InboxEntity>>
 
+    @Query("SELECT * FROM inboxes ORDER BY createdAt DESC")
+    suspend fun getAllInboxesList(): List<InboxEntity>
+
     @Query("SELECT * FROM inboxes WHERE inboxId = :inboxId")
     suspend fun getInbox(inboxId: String): InboxEntity?
 

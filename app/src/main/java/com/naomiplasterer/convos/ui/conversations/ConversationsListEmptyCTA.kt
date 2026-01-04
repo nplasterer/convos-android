@@ -1,21 +1,30 @@
 package com.naomiplasterer.convos.ui.conversations
 
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import com.naomiplasterer.convos.ui.theme.CornerRadius
 import com.naomiplasterer.convos.ui.theme.Spacing
 
@@ -40,14 +49,13 @@ fun ConversationsListEmptyCTA(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     shape = RoundedCornerShape(CornerRadius.mediumLarger)
                 )
-                .padding(40.dp),
+                .padding(Spacing.step10x),
             verticalArrangement = Arrangement.spacedBy(Spacing.step4x)
         ) {
             Text(
                 text = "Pop-up private convos",
                 style = MaterialTheme.typography.headlineLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 34.sp
+                    fontWeight = FontWeight.Bold
                 ),
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -87,7 +95,7 @@ fun ConversationsListEmptyCTA(
         ) {
             Row(
                 modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://xmtp.org"))
+                    val intent = Intent(Intent.ACTION_VIEW, "https://xmtp.org".toUri())
                     context.startActivity(intent)
                 },
                 horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
@@ -108,7 +116,8 @@ fun ConversationsListEmptyCTA(
 
             Row(
                 modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://convos.org/terms-and-privacy"))
+                    val intent = Intent(Intent.ACTION_VIEW,
+                        "https://hq.convos.org/privacy-and-terms".toUri())
                     context.startActivity(intent)
                 },
                 horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),

@@ -9,6 +9,7 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -31,6 +32,8 @@ fun ConversationsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val hasCreatedMoreThanOneConvo by viewModel.hasCreatedMoreThanOneConvo.collectAsState()
 
+    // Don't auto-navigate - let the user see the empty state UI
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -51,35 +54,17 @@ fun ConversationsScreen(
                     Spacer(modifier = Modifier.weight(1f))
 
                     IconButton(onClick = onScanConversationClick) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.QrCodeScanner,
-                                contentDescription = "Scan"
-                            )
-                            Text(
-                                text = "Scan",
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "Scan"
+                        )
                     }
 
                     IconButton(onClick = onNewConversationClick) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Create,
-                                contentDescription = "Compose"
-                            )
-                            Text(
-                                text = "Compose",
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Create,
+                            contentDescription = "Compose"
+                        )
                     }
                 }
             }
@@ -95,13 +80,28 @@ fun ConversationsScreen(
                     LoadingState()
                 }
                 is ConversationsUiState.NoSession -> {
-                    NoSessionState()
+                    // Show the "pop a convo" empty state UI for no session too
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        ConversationsListEmptyCTA(
+                            onStartConvo = onNewConversationClick,
+                            onJoinConvo = onScanConversationClick
+                        )
+                    }
                 }
                 is ConversationsUiState.Empty -> {
-                    ConversationsListEmptyCTA(
-                        onStartConvo = onNewConversationClick,
-                        onJoinConvo = onScanConversationClick
-                    )
+                    // Show the "pop a convo" empty state UI
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                        ConversationsListEmptyCTA(
+                            onStartConvo = onNewConversationClick,
+                            onJoinConvo = onScanConversationClick
+                        )
+                    }
                 }
                 is ConversationsUiState.Success -> {
                     val shouldShowCTA = state.conversations.size == 1 && !hasCreatedMoreThanOneConvo

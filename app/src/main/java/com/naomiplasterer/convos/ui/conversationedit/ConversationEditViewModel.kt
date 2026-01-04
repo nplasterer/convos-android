@@ -14,8 +14,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
-import timber.log.Timber
+import android.util.Log
 import javax.inject.Inject
+
+private const val TAG = "ConversationEditViewModel"
 
 @HiltViewModel
 class ConversationEditViewModel @Inject constructor(
@@ -31,9 +33,6 @@ class ConversationEditViewModel @Inject constructor(
 
     private val _conversationName = MutableStateFlow("")
     val conversationName: StateFlow<String> = _conversationName.asStateFlow()
-
-    private val _conversationDescription = MutableStateFlow("")
-    val conversationDescription: StateFlow<String> = _conversationDescription.asStateFlow()
 
     private val _conversationImageUri = MutableStateFlow<String?>(null)
     val conversationImageUri: StateFlow<String?> = _conversationImageUri.asStateFlow()
@@ -62,14 +61,13 @@ class ConversationEditViewModel @Inject constructor(
 
                 if (conversation != null) {
                     _conversationName.value = conversation.name ?: ""
-                    _conversationDescription.value = conversation.description ?: ""
                     _conversationImageUri.value = conversation.imageUrl
                     _uiState.value = ConversationEditUiState.Success(conversation)
                 } else {
                     _uiState.value = ConversationEditUiState.Error("Conversation not found")
                 }
             } catch (e: Exception) {
-                Timber.e(e, "Failed to load conversation")
+                Log.e(TAG, "Failed to load conversation", e)
                 _uiState.value = ConversationEditUiState.Error(e.message ?: "Failed to load conversation")
             }
         }
@@ -79,10 +77,6 @@ class ConversationEditViewModel @Inject constructor(
         if (name.length <= MAX_NAME_LENGTH) {
             _conversationName.value = name
         }
-    }
-
-    fun updateConversationDescription(description: String) {
-        _conversationDescription.value = description
     }
 
     fun updateConversationImage(uri: Uri?) {
@@ -102,13 +96,19 @@ class ConversationEditViewModel @Inject constructor(
                     inboxId = sessionState.inboxId,
                     conversationId = conversationId,
                     name = _conversationName.value.ifBlank { null },
-                    description = _conversationDescription.value.ifBlank { null },
+                    description = null,
                     imageUrl = _conversationImageUri.value
+                ).fold(
+                    onSuccess = {
+                        Log.d(TAG, "Conversation details saved successfully")
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to save conversation details", error)
+                        _uiState.value = ConversationEditUiState.Error(error.message ?: "Failed to save conversation")
+                    }
                 )
-
-                Timber.d("Conversation details saved successfully")
             } catch (e: Exception) {
-                Timber.e(e, "Failed to save conversation details")
+                Log.e(TAG, "Failed to save conversation details", e)
                 _uiState.value = ConversationEditUiState.Error(e.message ?: "Failed to save conversation")
             }
         }

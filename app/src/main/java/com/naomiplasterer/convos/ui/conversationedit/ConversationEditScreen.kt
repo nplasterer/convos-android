@@ -31,7 +31,6 @@ fun ConversationEditScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val conversationName by viewModel.conversationName.collectAsState()
-    val conversationDescription by viewModel.conversationDescription.collectAsState()
     val conversationImageUri by viewModel.conversationImageUri.collectAsState()
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -151,16 +150,6 @@ fun ConversationEditScreen(
                         supportingText = {
                             Text("${conversationName.length}/${ConversationEditViewModel.MAX_NAME_LENGTH}")
                         }
-                    )
-
-                    OutlinedTextField(
-                        value = conversationDescription,
-                        onValueChange = viewModel::updateConversationDescription,
-                        label = { Text("Description") },
-                        placeholder = { Text("Add a description...") },
-                        minLines = 3,
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth()
                     )
 
                     Spacer(modifier = Modifier.weight(1f))

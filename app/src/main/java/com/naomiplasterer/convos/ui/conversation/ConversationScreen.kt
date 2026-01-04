@@ -1,27 +1,43 @@
 package com.naomiplasterer.convos.ui.conversation
 
-import androidx.compose.foundation.ExperimentalFoundationApi
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
+import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.Message
 import com.naomiplasterer.convos.domain.model.MessageContent
+import com.naomiplasterer.convos.domain.model.MessageStatus
+import com.naomiplasterer.convos.ui.theme.ConvosTheme
 import com.naomiplasterer.convos.ui.theme.CornerRadius
 import com.naomiplasterer.convos.ui.theme.Spacing
 import java.text.SimpleDateFormat
@@ -32,13 +48,48 @@ import java.util.*
 fun ConversationScreen(
     viewModel: ConversationViewModel = hiltViewModel(),
     onBackClick: () -> Unit = {},
-    onInfoClick: () -> Unit = {},
     onEditClick: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
+    val explodeState by viewModel.explodeState.collectAsState()
+    val isCreator by viewModel.isCreator.collectAsState()
+
     var showMenu by remember { mutableStateOf(false) }
+    var showShareDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showLeaveDialog by remember { mutableStateOf(false) }
+    var showExplodeDialog by remember { mutableStateOf(false) }
+
+    // Helper to check if conversation should show delete prompt (only 1 member)
+    val shouldPromptDelete = remember(uiState) {
+        when (val state = uiState) {
+            is ConversationUiState.Success -> state.conversation.members.size <= 1
+            else -> false
+        }
+    }
+
+    // Handle back press with delete prompt for single-member conversations
+    val handleBackPress = {
+        if (shouldPromptDelete) {
+            showDeleteDialog = true
+        } else {
+            onBackClick()
+        }
+    }
+
+    // Intercept system back button
+    BackHandler {
+        handleBackPress()
+    }
+
+    // TODO: Implement image attachment functionality
+    // val imagePickerLauncher = rememberLauncherForActivityResult(
+    //     contract = ActivityResultContracts.GetContent()
+    // ) { uri: Uri? ->
+    //     uri?.let { viewModel.sendImageAttachment(it) }
+    // }
 
     LaunchedEffect(Unit) {
         viewModel.syncMessages()
@@ -52,12 +103,12 @@ fun ConversationScreen(
                     TopAppBar(
                         title = {
                             Text(
-                                text = state.conversation.name ?: "Unnamed Conversation",
+                                text = state.conversation.name ?: "Untitled",
                                 style = MaterialTheme.typography.titleMedium
                             )
                         },
                         navigationIcon = {
-                            IconButton(onClick = onBackClick) {
+                            IconButton(onClick = handleBackPress) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                             }
                         },
@@ -71,6 +122,16 @@ fun ConversationScreen(
                                     onDismissRequest = { showMenu = false }
                                 ) {
                                     DropdownMenuItem(
+                                        text = { Text("Share Invite") },
+                                        onClick = {
+                                            showMenu = false
+                                            showShareDialog = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Share, contentDescription = null)
+                                        }
+                                    )
+                                    DropdownMenuItem(
                                         text = { Text("Edit Conversation") },
                                         onClick = {
                                             showMenu = false
@@ -80,16 +141,53 @@ fun ConversationScreen(
                                             Icon(Icons.Default.Edit, contentDescription = null)
                                         }
                                     )
-                                    DropdownMenuItem(
-                                        text = { Text("Profile") },
-                                        onClick = {
-                                            showMenu = false
-                                            onInfoClick()
-                                        },
-                                        leadingIcon = {
-                                            Icon(Icons.Default.Info, contentDescription = null)
+                                    // Show menu options based on member count and creator status
+                                    if (state.conversation.members.size > 1) {
+                                        // Show "Explode Now" for creators with 2+ members
+                                        if (isCreator) {
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text("💥 Explode Now")
+                                                    }
+                                                },
+                                                onClick = {
+                                                    showMenu = false
+                                                    showExplodeDialog = true
+                                                },
+                                                colors = MenuDefaults.itemColors(
+                                                    textColor = MaterialTheme.colorScheme.error
+                                                )
+                                            )
+                                            HorizontalDivider()
                                         }
-                                    )
+                                        // Always show "Leave" for multi-member groups
+                                        DropdownMenuItem(
+                                            text = { Text("Leave Conversation") },
+                                            onClick = {
+                                                showMenu = false
+                                                showLeaveDialog = true
+                                            },
+                                            colors = MenuDefaults.itemColors(
+                                                textColor = MaterialTheme.colorScheme.error
+                                            )
+                                        )
+                                    } else {
+                                        // For single-member/draft conversations
+                                        DropdownMenuItem(
+                                            text = { Text("Delete Conversation") },
+                                            onClick = {
+                                                showMenu = false
+                                                viewModel.deleteConversation()
+                                                onBackClick()
+                                            },
+                                            colors = MenuDefaults.itemColors(
+                                                textColor = MaterialTheme.colorScheme.error
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -99,7 +197,7 @@ fun ConversationScreen(
                     TopAppBar(
                         title = { Text("Conversation") },
                         navigationIcon = {
-                            IconButton(onClick = onBackClick) {
+                            IconButton(onClick = handleBackPress) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                             }
                         }
@@ -121,13 +219,13 @@ fun ConversationScreen(
             }
             is ConversationUiState.Success -> {
                 ConversationContent(
+                    conversation = state.conversation,
                     messages = state.messages,
                     currentInboxId = state.conversation.inboxId,
                     messageText = messageText,
                     onMessageTextChange = viewModel::updateMessageText,
                     onSendClick = viewModel::sendMessage,
                     isSending = isSending,
-                    onAddReaction = viewModel::addReaction,
                     modifier = Modifier.padding(paddingValues)
                 )
             }
@@ -147,21 +245,118 @@ fun ConversationScreen(
             }
         }
     }
+
+    if (showShareDialog) {
+        when (val state = uiState) {
+            is ConversationUiState.Success -> {
+                val inviteCode by viewModel.inviteCode.collectAsState()
+                ConversationShareDialog(
+                    inviteCode = inviteCode,
+                    conversationName = state.conversation.name,
+                    conversationImageUrl = state.conversation.imageUrl,
+                    onDismiss = { showShareDialog = false },
+                    onGenerateInvite = { viewModel.generateInviteCode() }
+                )
+            }
+            else -> {}
+        }
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete Conversation?") },
+            text = {
+                Text("You're the only member of this conversation. Would you like to delete it or keep it?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteConversation()
+                        showDeleteDialog = false
+                        onBackClick()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDeleteDialog = false
+                    onBackClick()
+                }) {
+                    Text("Keep")
+                }
+            }
+        )
+    }
+
+    if (showLeaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showLeaveDialog = false },
+            title = { Text("Leave Conversation?") },
+            text = {
+                Text("Are you sure you want to leave this conversation? This will delete your identity for this conversation and you won't be able to send or receive messages.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.leaveConversation()
+                        showLeaveDialog = false
+                        onBackClick()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Leave")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showLeaveDialog = false
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Explode confirmation dialog
+    ExplodeConfirmationDialog(
+        showDialog = showExplodeDialog,
+        explodeState = explodeState,
+        onConfirm = {
+            viewModel.explodeConversation()
+        },
+        onDismiss = {
+            showExplodeDialog = false
+            // Navigate back if exploded successfully
+            if (explodeState is ExplodeState.Exploded) {
+                onBackClick()
+            }
+        }
+    )
 }
 
 @Composable
 private fun ConversationContent(
+    conversation: Conversation,
     messages: List<Message>,
     currentInboxId: String,
     messageText: String,
     onMessageTextChange: (String) -> Unit,
     onSendClick: () -> Unit,
     isSending: Boolean,
-    modifier: Modifier = Modifier,
-    onAddReaction: (String, String) -> Unit = { _, _ -> }
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .imePadding() // Push content up when keyboard appears
     ) {
         val listState = rememberLazyListState()
 
@@ -171,18 +366,43 @@ private fun ConversationContent(
                 .fillMaxWidth(),
             state = listState,
             reverseLayout = true,
-            contentPadding = PaddingValues(Spacing.step4x)
+            contentPadding = PaddingValues(horizontal = Spacing.step4x, vertical = Spacing.step2x)
         ) {
-            items(
-                items = messages.reversed(),
-                key = { it.id }
-            ) { message ->
+            // Messages are already sorted DESC (newest first) from DB
+            // reverseLayout=true displays them bottom-up (newest at bottom)
+            // So we don't need to reverse them again
+            itemsIndexed(
+                items = messages,
+                key = { _, message -> message.id }
+            ) { index, message ->
+                val previousMessage = messages.getOrNull(index - 1)
+                val nextMessage = messages.getOrNull(index + 1)
+
+                // Determine if this is the start of a message group (Android grouping logic)
+                val isGroupStart = previousMessage == null ||
+                    previousMessage.senderInboxId != message.senderInboxId ||
+                    (message.sentAt - previousMessage.sentAt) > 5 * 60 * 1000 // 5 minutes
+
+                val isGroupEnd = nextMessage == null ||
+                    nextMessage.senderInboxId != message.senderInboxId ||
+                    (nextMessage.sentAt - message.sentAt) > 5 * 60 * 1000 // 5 minutes
+
+                val senderName = conversation.members.find { it.inboxId == message.senderInboxId }?.let { member ->
+                    member.addresses.firstOrNull() ?: message.senderInboxId.take(8)
+                } ?: message.senderInboxId.take(8)
+
                 MessageBubble(
                     message = message,
                     isOwn = message.senderInboxId == currentInboxId,
-                    onAddReaction = { emoji -> onAddReaction(message.id, emoji) }
+                    showAvatar = isGroupEnd && message.senderInboxId != currentInboxId,
+                    showSenderName = isGroupStart && message.senderInboxId != currentInboxId,
+                    senderName = senderName,
+                    senderAvatarUrl = null
                 )
-                Spacer(modifier = Modifier.height(Spacing.step2x))
+
+                // Android-native spacing: tight within group, larger between groups
+                val spacerHeight = if (isGroupEnd) 12.dp else 2.dp
+                Spacer(modifier = Modifier.height(spacerHeight))
             }
         }
 
@@ -195,36 +415,75 @@ private fun ConversationContent(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: Message,
     isOwn: Boolean,
     modifier: Modifier = Modifier,
-    onAddReaction: (String) -> Unit = {}
+    showAvatar: Boolean = false,
+    showSenderName: Boolean = false,
+    senderName: String? = null,
+    senderAvatarUrl: String? = null
 ) {
+    // Handle system update messages separately
+    if (message.content is MessageContent.Update) {
+        SystemUpdateMessage(
+            message = message,
+            modifier = modifier
+        )
+        return
+    }
+
     val text = when (val content = message.content) {
         is MessageContent.Text -> content.text
         is MessageContent.Emoji -> content.emoji
         is MessageContent.Attachment -> "📎 ${content.url}"
-        is MessageContent.Update -> content.details
+        is MessageContent.Update -> content.details  // This case is handled above, but kept for completeness
     }
-
-    var showReactionPicker by remember { mutableStateOf(false) }
 
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
     ) {
+        // Avatar only shown for first message in group
+        if (!isOwn && showAvatar) {
+            MessageAvatar(
+                avatarUrl = senderAvatarUrl,
+                name = senderName ?: "U",
+                modifier = Modifier
+                    .padding(end = Spacing.step2x)
+                    .align(Alignment.Bottom)
+            )
+        } else if (!isOwn) {
+            // Spacer to maintain alignment for subsequent messages
+            Spacer(modifier = Modifier.width(32.dp + Spacing.step2x))
+        }
+
         Column(
-            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start
+            horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start,
+            modifier = Modifier.weight(1f, fill = false)
         ) {
+            // Sender name only for first message in group
+            if (showSenderName && senderName != null) {
+                Text(
+                    text = senderName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(
+                        start = if (isOwn) 0.dp else Spacing.step2x,
+                        end = if (isOwn) Spacing.step2x else 0.dp,
+                        bottom = Spacing.stepHalf
+                    )
+                )
+            }
+
+            // Message bubble with Android-native rounded corners
             Surface(
                 shape = RoundedCornerShape(
-                    topStart = CornerRadius.medium,
-                    topEnd = CornerRadius.medium,
-                    bottomStart = if (isOwn) CornerRadius.medium else 4.dp,
-                    bottomEnd = if (isOwn) 4.dp else CornerRadius.medium
+                    topStart = 20.dp,
+                    topEnd = 20.dp,
+                    bottomStart = if (isOwn) 20.dp else 4.dp,
+                    bottomEnd = if (isOwn) 4.dp else 20.dp
                 ),
                 color = if (isOwn) {
                     MaterialTheme.colorScheme.primary
@@ -233,60 +492,61 @@ private fun MessageBubble(
                 },
                 modifier = Modifier
                     .widthIn(max = 280.dp)
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { showReactionPicker = true }
-                    )
-            ) {
-            Column(
-                modifier = Modifier.padding(Spacing.step3x)
             ) {
                 Text(
                     text = text,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyLarge,
                     color = if (isOwn) {
                         MaterialTheme.colorScheme.onPrimary
                     } else {
                         MaterialTheme.colorScheme.onSurface
-                    }
+                    },
+                    modifier = Modifier.padding(
+                        horizontal = 12.dp,
+                        vertical = 8.dp
+                    )
                 )
-                Spacer(modifier = Modifier.height(Spacing.stepX))
+            }
+
+            // Timestamp and status below bubble (Android pattern)
+            Row(
+                modifier = Modifier.padding(
+                    start = if (isOwn) 0.dp else Spacing.step2x,
+                    end = if (isOwn) Spacing.step2x else 0.dp,
+                    top = Spacing.stepHalf
+                ),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
                     text = formatMessageTime(message.sentAt),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isOwn) {
-                        MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
-            }
-        }
 
-            if (showReactionPicker) {
-                Card(
-                    modifier = Modifier.padding(top = Spacing.step2x),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(Spacing.step2x),
-                        horizontalArrangement = Arrangement.spacedBy(Spacing.step2x)
-                    ) {
-                        val commonEmojis = listOf("👍", "❤️", "😂", "😮", "😢", "🎉")
-                        commonEmojis.forEach { emoji ->
-                            TextButton(
-                                onClick = {
-                                    onAddReaction(emoji)
-                                    showReactionPicker = false
-                                }
-                            ) {
-                                Text(
-                                    text = emoji,
-                                    style = MaterialTheme.typography.headlineSmall
-                                )
-                            }
+                // Status indicator for own messages
+                if (isOwn) {
+                    when (message.status) {
+                        MessageStatus.SENDING -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(10.dp),
+                                strokeWidth = 1.dp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                        MessageStatus.SENT, MessageStatus.DELIVERED -> {
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                        MessageStatus.FAILED -> {
+                            Text(
+                                text = "!",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
                         }
                     }
                 }
@@ -305,14 +565,14 @@ private fun MessageInput(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        tonalElevation = 3.dp
+        tonalElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(Spacing.step2x),
+                .padding(horizontal = Spacing.step4x, vertical = Spacing.step2x),
             horizontalArrangement = Arrangement.spacedBy(Spacing.step2x),
-            verticalAlignment = Alignment.Bottom
+            verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
                 value = text,
@@ -346,4 +606,201 @@ private fun MessageInput(
 private fun formatMessageTime(timestamp: Long): String {
     val sdf = SimpleDateFormat("h:mm a", Locale.getDefault())
     return sdf.format(Date(timestamp))
+}
+
+@Composable
+private fun SystemUpdateMessage(
+    message: Message,
+    modifier: Modifier = Modifier
+) {
+    val content = message.content as MessageContent.Update
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.step2x),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(horizontal = Spacing.step4x)
+        ) {
+            Text(
+                text = content.details,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(
+                    horizontal = Spacing.step3x,
+                    vertical = Spacing.step2x
+                )
+            )
+        }
+    }
+}
+
+@Composable
+private fun MessageAvatar(
+    avatarUrl: String?,
+    name: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.size(32.dp),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        if (avatarUrl != null) {
+            AsyncImage(
+                model = avatarUrl,
+                contentDescription = "Avatar for $name",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            // Monogram fallback
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = name.take(1).uppercase(),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Compose Previews
+// ============================================================================
+
+@Preview(name = "Message Bubble - Own", showBackground = true)
+@Composable
+private fun PreviewMessageBubbleOwn() {
+    ConvosTheme {
+        Surface {
+            MessageBubble(
+                message = Message(
+                    id = "1",
+                    conversationId = "conv1",
+                    senderInboxId = "inbox1",
+                    content = MessageContent.Text("Hey! How are you doing today? 👋"),
+                    status = MessageStatus.SENT,
+                    sentAt = System.currentTimeMillis(),
+                    deliveredAt = null
+                ),
+                isOwn = true,
+                showAvatar = false,
+                showSenderName = false,
+                modifier = Modifier.padding(Spacing.step4x)
+            )
+        }
+    }
+}
+
+@Preview(name = "Message Bubble - Other", showBackground = true)
+@Composable
+private fun PreviewMessageBubbleOther() {
+    ConvosTheme {
+        Surface {
+            MessageBubble(
+                message = Message(
+                    id = "2",
+                    conversationId = "conv1",
+                    senderInboxId = "inbox2",
+                    content = MessageContent.Text("I'm doing great! Thanks for asking 😊"),
+                    status = MessageStatus.SENT,
+                    sentAt = System.currentTimeMillis(),
+                    deliveredAt = null
+                ),
+                isOwn = false,
+                showAvatar = true,
+                showSenderName = true,
+                senderName = "Alice",
+                senderAvatarUrl = null,
+                modifier = Modifier.padding(Spacing.step4x)
+            )
+        }
+    }
+}
+
+
+@Preview(name = "Message Input", showBackground = true)
+@Composable
+private fun PreviewMessageInput() {
+    ConvosTheme {
+        MessageInput(
+            text = "Type a message...",
+            onTextChange = {},
+            onSendClick = {},
+            enabled = true
+        )
+    }
+}
+
+@Preview(name = "Conversation Content", showBackground = true, heightDp = 600)
+@Composable
+private fun PreviewConversationContent() {
+    ConvosTheme {
+        ConversationContent(
+            conversation = Conversation(
+                id = "conv1",
+                inboxId = "inbox1",
+                clientId = "client1",
+                topic = "topic1",
+                creatorInboxId = "inbox1",
+                inviteTag = null,
+                consent = com.naomiplasterer.convos.domain.model.ConsentState.ALLOWED,
+                kind = com.naomiplasterer.convos.domain.model.ConversationKind.GROUP,
+                name = "Test Group",
+                description = null,
+                imageUrl = null,
+                createdAt = System.currentTimeMillis(),
+                lastMessageAt = null,
+                expiresAt = null,
+                members = emptyList()
+            ),
+            messages = listOf(
+                Message(
+                    id = "1",
+                    conversationId = "conv1",
+                    senderInboxId = "inbox1",
+                    content = MessageContent.Text("Hey there!"),
+                    status = MessageStatus.SENT,
+                    sentAt = System.currentTimeMillis() - 60000,
+                    deliveredAt = null,
+                ),
+                Message(
+                    id = "2",
+                    conversationId = "conv1",
+                    senderInboxId = "inbox2",
+                    content = MessageContent.Text("Hi! How can I help you?"),
+                    status = MessageStatus.SENT,
+                    sentAt = System.currentTimeMillis() - 30000,
+                    deliveredAt = null,
+                ),
+                Message(
+                    id = "3",
+                    conversationId = "conv1",
+                    senderInboxId = "inbox1",
+                    content = MessageContent.Text("Just testing the new message bubbles! They look great 🎉"),
+                    status = MessageStatus.SENT,
+                    sentAt = System.currentTimeMillis(),
+                    deliveredAt = null
+                )
+            ),
+            currentInboxId = "inbox1",
+            messageText = "",
+            onMessageTextChange = {},
+            onSendClick = {},
+            isSending = false
+        )
+    }
 }

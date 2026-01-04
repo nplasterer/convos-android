@@ -9,8 +9,10 @@ fun ConversationEntity.toDomain(): Conversation {
     return Conversation(
         id = id,
         inboxId = inboxId,
+        clientId = clientId,
         topic = topic,
         creatorInboxId = creatorInboxId,
+        inviteTag = inviteTag,
         consent = when (consent) {
             "allowed" -> ConsentState.ALLOWED
             "denied" -> ConsentState.DENIED
@@ -29,7 +31,8 @@ fun ConversationEntity.toDomain(): Conversation {
         isMuted = isMuted,
         isDraft = isDraft,
         createdAt = createdAt,
-        lastMessageAt = lastMessageAt
+        lastMessageAt = lastMessageAt,
+        expiresAt = expiresAt
     )
 }
 
@@ -37,8 +40,10 @@ fun Conversation.toEntity(): ConversationEntity {
     return ConversationEntity(
         id = id,
         inboxId = inboxId,
+        clientId = clientId,
         topic = topic,
         creatorInboxId = creatorInboxId,
+        inviteTag = inviteTag,
         consent = when (consent) {
             ConsentState.ALLOWED -> "allowed"
             ConsentState.DENIED -> "denied"
@@ -56,7 +61,8 @@ fun Conversation.toEntity(): ConversationEntity {
         isMuted = isMuted,
         isDraft = isDraft,
         createdAt = createdAt,
-        lastMessageAt = lastMessageAt
+        lastMessageAt = lastMessageAt,
+        expiresAt = expiresAt
     )
 }
 
@@ -75,21 +81,59 @@ suspend fun org.xmtp.android.library.Conversation.toEntity(inboxId: String): Con
         ""
     }
 
+    // Access group metadata properties (using deprecated properties is fine here)
+    @Suppress("DEPRECATION")
+    val groupName = try {
+        group?.name?.takeIf { it.isNotBlank() }
+    } catch (e: Exception) {
+        null
+    }
+
+    @Suppress("DEPRECATION")
+    val groupDescription = try {
+        group?.description
+    } catch (e: Exception) {
+        null
+    }
+
+    @Suppress("DEPRECATION")
+    val groupImageUrl = try {
+        group?.imageUrl?.takeIf { it.isNotEmpty() }
+    } catch (e: Exception) {
+        null
+    }
+
+    // Extract invite tag from metadata if this is a group
+    val inviteTag = if (group != null) {
+        try {
+            val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
+            val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+            metadata?.tag
+        } catch (e: Exception) {
+            null
+        }
+    } else {
+        null
+    }
+
     return ConversationEntity(
         id = this.id,
         inboxId = inboxId,
+        clientId = "", // Will be set by caller
         topic = this.topic,
         creatorInboxId = creatorId,
+        inviteTag = inviteTag,
         consent = "unknown",
         kind = if (isGroup) "group" else "dm",
-        name = group?.name ?: null,
-        description = group?.description ?: null,
-        imageUrl = null,
+        name = groupName,
+        description = groupDescription,
+        imageUrl = groupImageUrl,
         isPinned = false,
         isUnread = false,
         isMuted = false,
         isDraft = false,
         createdAt = this.createdAt.time,
-        lastMessageAt = null
+        lastMessageAt = null,
+        expiresAt = null // Will be set from metadata if available
     )
 }

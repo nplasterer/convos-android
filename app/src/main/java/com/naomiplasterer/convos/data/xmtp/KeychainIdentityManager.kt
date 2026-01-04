@@ -7,10 +7,12 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.xmtp.android.library.messages.PrivateKeyBuilder
-import timber.log.Timber
+import android.util.Log
 import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "KeychainIdentityManager"
 
 data class StoredIdentity(
     val inboxId: String,
@@ -51,12 +53,12 @@ class KeychainIdentityManager @Inject constructor(
     )
 
     fun generateNewIdentity(): PrivateKeyBuilder {
-        Timber.d("Generating new identity with random wallet")
+        Log.d(TAG, "Generating new identity with random wallet")
         return PrivateKeyBuilder()
     }
 
     fun generateDatabaseKey(): ByteArray {
-        Timber.d("Generating new 32-byte database encryption key")
+        Log.d(TAG, "Generating new 32-byte database encryption key")
         return SecureRandom().generateSeed(32)
     }
 
@@ -72,9 +74,9 @@ class KeychainIdentityManager @Inject constructor(
                 apply()
             }
 
-            Timber.d("Saved identity for inbox: $inboxId")
+            Log.d(TAG, "Saved identity for inbox: $inboxId")
         } catch (e: Exception) {
-            Timber.e(e, "Failed to save identity for inbox: $inboxId")
+            Log.e(TAG, "Failed to save identity for inbox: $inboxId", e)
             throw e
         }
     }
@@ -85,17 +87,17 @@ class KeychainIdentityManager @Inject constructor(
             val encodedDbKey = sharedPreferences.getString("${DB_KEY_PREFIX}$inboxId", null)
 
             if (encodedPrivateKey == null || encodedDbKey == null) {
-                Timber.d("No identity found for inbox: $inboxId")
+                Log.d(TAG, "No identity found for inbox: $inboxId")
                 return null
             }
 
             val privateKeyData = Base64.decode(encodedPrivateKey, Base64.DEFAULT)
             val databaseKey = Base64.decode(encodedDbKey, Base64.DEFAULT)
 
-            Timber.d("Loaded identity for inbox: $inboxId")
+            Log.d(TAG, "Loaded identity for inbox: $inboxId")
             StoredIdentity(inboxId, privateKeyData, databaseKey)
         } catch (e: Exception) {
-            Timber.e(e, "Failed to load identity for inbox: $inboxId")
+            Log.e(TAG, "Failed to load identity for inbox: $inboxId", e)
             null
         }
     }
@@ -106,7 +108,7 @@ class KeychainIdentityManager @Inject constructor(
             remove("${DB_KEY_PREFIX}$inboxId")
             apply()
         }
-        Timber.d("Deleted identity for inbox: $inboxId")
+        Log.d(TAG, "Deleted identity for inbox: $inboxId")
     }
 
     fun getAllInboxIds(): List<String> {
@@ -114,12 +116,12 @@ class KeychainIdentityManager @Inject constructor(
         return allKeys
             .filter { it.startsWith(PRIVATE_KEY_PREFIX) }
             .map { it.removePrefix(PRIVATE_KEY_PREFIX) }
-            .also { Timber.d("Found ${it.size} stored identities") }
+            .also { Log.d(TAG, "Found ${it.size} stored identities") }
     }
 
     fun clearAll() {
         sharedPreferences.edit().clear().apply()
-        Timber.d("Cleared all stored identities")
+        Log.d(TAG, "Cleared all stored identities")
     }
 
     companion object {

@@ -19,8 +19,10 @@ data class ConversationEntity(
     @PrimaryKey
     val id: String,
     val inboxId: String,
+    val clientId: String,
     val topic: String,
     val creatorInboxId: String,
+    val inviteTag: String?,
     val consent: String,
     val kind: String,
     val name: String?,
@@ -31,5 +33,6 @@ data class ConversationEntity(
     val isMuted: Boolean = false,
     val isDraft: Boolean = false,
     val createdAt: Long,
-    val lastMessageAt: Long?
+    val lastMessageAt: Long?,
+    val expiresAt: Long?
 )

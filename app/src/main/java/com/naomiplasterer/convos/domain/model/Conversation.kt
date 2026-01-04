@@ -3,8 +3,10 @@ package com.naomiplasterer.convos.domain.model
 data class Conversation(
     val id: String,
     val inboxId: String,
+    val clientId: String,
     val topic: String,
     val creatorInboxId: String,
+    val inviteTag: String?,
     val consent: ConsentState,
     val kind: ConversationKind,
     val name: String?,
@@ -16,6 +18,7 @@ data class Conversation(
     val isDraft: Boolean = false,
     val createdAt: Long,
     val lastMessageAt: Long?,
+    val expiresAt: Long?,
     val lastMessagePreview: String? = null,
     val members: List<Member> = emptyList()
 )

@@ -79,7 +79,7 @@ fun ConversationListItem(
                     verticalArrangement = Arrangement.spacedBy(Spacing.stepX)
                 ) {
                     Text(
-                        text = conversation.name ?: "Unnamed Conversation",
+                        text = conversation.name ?: "Untitled",
                         style = if (conversation.isUnread) {
                             MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                         } else {

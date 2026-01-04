@@ -24,6 +24,5 @@ data class MessageEntity(
     val content: String,
     val status: String,
     val sentAt: Long,
-    val deliveredAt: Long?,
-    val replyToId: String?
+    val deliveredAt: Long?
 )

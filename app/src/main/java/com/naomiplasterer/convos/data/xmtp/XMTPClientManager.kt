@@ -8,10 +8,15 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.xmtp.android.library.Client
 import org.xmtp.android.library.ClientOptions
 import org.xmtp.android.library.XMTPEnvironment
+import org.xmtp.android.library.codecs.AttachmentCodec
+import org.xmtp.android.library.codecs.ReactionCodec
+import org.xmtp.android.library.codecs.ReplyCodec
 import org.xmtp.android.library.messages.PrivateKeyBuilder
-import timber.log.Timber
+import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "XMTPClientManager"
 
 @Singleton
 class XMTPClientManager @Inject constructor(
@@ -22,6 +27,17 @@ class XMTPClientManager @Inject constructor(
     private val _activeInboxId = MutableStateFlow<String?>(null)
     val activeInboxId: StateFlow<String?> = _activeInboxId.asStateFlow()
 
+    init {
+        registerCodecs()
+    }
+
+    private fun registerCodecs() {
+        Client.register(codec = AttachmentCodec())
+        Client.register(codec = ReactionCodec())
+        Client.register(codec = ReplyCodec())
+        Log.d(TAG, "Registered XMTP codecs: Attachment, Reaction, Reply")
+    }
+
     fun getClient(inboxId: String): Client? {
         return _clients[inboxId]
     }
@@ -30,27 +46,31 @@ class XMTPClientManager @Inject constructor(
         return _activeInboxId.value?.let { _clients[it] }
     }
 
+    fun getAllClients(): Map<String, Client> {
+        return _clients.toMap()
+    }
+
     suspend fun createClient(
         address: String,
         inboxId: String? = null,
-        environment: XMTPEnvironment = XMTPEnvironment.DEV
+        environment: XMTPEnvironment = XMTPEnvironment.PRODUCTION
     ): Result<Client> {
         return try {
             val client = if (inboxId != null) {
-                Timber.d("Authorizing existing client for inbox: $inboxId")
+                Log.d(TAG, "Authorizing existing client for inbox: $inboxId")
                 authorizeExistingClient(inboxId, environment)
             } else {
-                Timber.d("Registering new client")
+                Log.d(TAG, "Registering new client")
                 registerNewClient(environment)
             }
 
             _clients[client.inboxId] = client
             _activeInboxId.value = client.inboxId
-            Timber.d("Successfully created/authorized XMTP client for inbox: ${client.inboxId}")
+            Log.d(TAG, "Successfully created/authorized XMTP client for inbox: ${client.inboxId}")
 
             Result.success(client)
         } catch (e: Exception) {
-            Timber.e(e, "Failed to create XMTP client")
+            Log.e(TAG, "Failed to create XMTP client", e)
             Result.failure(e)
         }
     }
@@ -60,11 +80,11 @@ class XMTPClientManager @Inject constructor(
         val dbKey = keychainIdentityManager.generateDatabaseKey()
         val options = buildClientOptions(dbKey, environment)
 
-        Timber.d("Creating new XMTP client with random wallet")
+        Log.d(TAG, "Creating new XMTP client with random wallet")
         val client = Client.create(account = wallet, options = options)
 
         keychainIdentityManager.saveIdentity(client.inboxId, wallet, dbKey)
-        Timber.d("New client created and saved. InboxId: ${client.inboxId}")
+        Log.d(TAG, "New client created and saved. InboxId: ${client.inboxId}")
 
         return client
     }
@@ -77,14 +97,14 @@ class XMTPClientManager @Inject constructor(
         val wallet = PrivateKeyBuilder(privateKey)
         val options = buildClientOptions(storedIdentity.databaseKey, environment)
 
-        Timber.d("Building XMTP client from stored identity")
+        Log.d(TAG, "Building XMTP client from stored identity")
         val client = Client.build(
             publicIdentity = wallet.publicIdentity,
             options = options,
             inboxId = inboxId
         )
 
-        Timber.d("Client built from stored identity. InboxId: ${client.inboxId}")
+        Log.d(TAG, "Client built from stored identity. InboxId: ${client.inboxId}")
         return client
     }
 
@@ -99,9 +119,9 @@ class XMTPClientManager @Inject constructor(
     fun setActiveInbox(inboxId: String) {
         if (_clients.containsKey(inboxId)) {
             _activeInboxId.value = inboxId
-            Timber.d("Set active inbox: $inboxId")
+            Log.d(TAG, "Set active inbox: $inboxId")
         } else {
-            Timber.w("Attempted to set non-existent inbox as active: $inboxId")
+            Log.w(TAG, "Attempted to set non-existent inbox as active: $inboxId")
         }
     }
 
@@ -110,13 +130,31 @@ class XMTPClientManager @Inject constructor(
         if (_activeInboxId.value == inboxId) {
             _activeInboxId.value = _clients.keys.firstOrNull()
         }
-        Timber.d("Removed client for inbox: $inboxId")
+        Log.d(TAG, "Removed client for inbox: $inboxId")
+    }
+
+    /**
+     * Get the raw secp256k1 private key bytes for the given inbox ID.
+     * This is needed for generating encrypted invite tokens.
+     */
+    fun getPrivateKeyBytes(inboxId: String): ByteArray? {
+        return try {
+            val storedIdentity = keychainIdentityManager.loadIdentity(inboxId) ?: return null
+            val privateKey = org.xmtp.android.library.messages.PrivateKey.parseFrom(storedIdentity.privateKeyData)
+
+            // Extract the secp256k1 private key bytes
+            // The PrivateKey protobuf contains a secp256k1.uncompressed field with the 32-byte scalar
+            privateKey.secp256K1?.bytes?.toByteArray()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to extract private key bytes for inbox: $inboxId", e)
+            null
+        }
     }
 
     fun clearAll() {
         _clients.clear()
         _activeInboxId.value = null
-        Timber.d("Cleared all XMTP clients")
+        Log.d(TAG, "Cleared all XMTP clients")
     }
 
     fun hasActiveClient(): Boolean = _activeInboxId.value != null && _clients.isNotEmpty()
