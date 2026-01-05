@@ -50,7 +50,6 @@ class InviteJoinRequestsManager @Inject constructor(
         val payload = SignedInviteValidator.getPayload(signedInvite)
         val tag = payload.tag
         pendingInvites[tag] = signedInvite
-        Log.d(TAG, "Stored pending invite with tag: $tag")
     }
 
     /**
@@ -72,14 +71,12 @@ class InviteJoinRequestsManager @Inject constructor(
             // First, try to get the tag from the group's custom metadata
             val groupTag = try {
                 // Try to get from appData (iOS compatible format)
-                // Convert the Group to Conversation.Group
                 val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
                 val metadata =
                     com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(
                         conversationGroup
                     )
                 if (metadata != null && !metadata.tag.isBlank()) {
-                    Log.d(TAG, "Extracted tag from group appData: ${metadata.tag}")
                     metadata.tag
                 } else {
                     // Fallback to legacy hex format in description if appData is empty
@@ -90,10 +87,6 @@ class InviteJoinRequestsManager @Inject constructor(
                                 groupDescription
                             )
                         if (legacyMetadata != null && !legacyMetadata.tag.isBlank()) {
-                            Log.d(
-                                TAG,
-                                "Extracted tag from legacy hex-encoded description: ${legacyMetadata.tag}"
-                            )
                             legacyMetadata.tag
                         } else {
                             throw IllegalStateException("Tag is empty or blank")
@@ -104,11 +97,6 @@ class InviteJoinRequestsManager @Inject constructor(
                 }
             } catch (e: Exception) {
                 // If we can't parse the metadata or tag is empty, check if we have exactly ONE pending invite from this creator.
-                // This is a workaround for when the group creator doesn't set ConversationCustomMetadata or sets an empty tag.
-                Log.d(
-                    TAG,
-                    "No custom metadata or empty tag in group description, checking by creator inbox ID"
-                )
 
                 // Get the group's creator (the member who added us)
                 val members = group.members()
@@ -135,48 +123,23 @@ class InviteJoinRequestsManager @Inject constructor(
                     }
 
                     if (matchingEntry != null) {
-                        Log.d(
-                            TAG,
-                            "Group $groupId matched pending invite by creator inbox ID, tag: ${matchingEntry.key}"
-                        )
                         matchingEntry.key
                     } else {
-                        Log.d(
-                            TAG,
-                            "Group $groupId from creator $creatorInboxId but no pending invite found - denying"
-                        )
                         group.updateConsentState(ConsentState.DENIED)
                         return@withContext false
                     }
                 } else {
-                    Log.d(
-                        TAG,
-                        "Group $groupId has no matching creator in pending invites - denying"
-                    )
                     group.updateConsentState(ConsentState.DENIED)
                     return@withContext false
                 }
             }
 
             if (pendingInvites.containsKey(groupTag)) {
-                Log.d(TAG, "Group $groupId matches pending invite with tag $groupTag - approving")
                 group.updateConsentState(ConsentState.ALLOWED)
                 pendingInvites.remove(groupTag)
-
-                // Emit the group ID so listeners know a group was successfully joined
-                Log.d(TAG, "Emitting groupMatched event for conversation: $groupId")
                 _groupMatched.emit(groupId)
-                Log.d(
-                    TAG,
-                    "Successfully emitted groupMatched event, current replay cache: ${_groupMatched.replayCache}"
-                )
-
                 true
             } else {
-                Log.d(
-                    TAG,
-                    "Group $groupId with tag $groupTag does not match any pending invites - denying"
-                )
                 group.updateConsentState(ConsentState.DENIED)
                 false
             }
@@ -193,8 +156,6 @@ class InviteJoinRequestsManager @Inject constructor(
         val results = mutableListOf<JoinRequestResult>()
 
         try {
-            Log.d(TAG, "Listing all DMs for join requests")
-
             client.conversations.sync()
 
             val allDms = client.conversations.listDms()
@@ -207,8 +168,6 @@ class InviteJoinRequestsManager @Inject constructor(
                     false
                 }
             }
-
-            Log.d(TAG, "Found ${dms.size} DMs to check for join requests")
 
             coroutineScope {
                 val deferredResults = dms.map { dm ->
@@ -226,8 +185,6 @@ class InviteJoinRequestsManager @Inject constructor(
                     results.add(result)
                 }
             }
-
-            Log.d(TAG, "Completed DM sync for join requests, found ${results.size} valid requests")
         } catch (e: Exception) {
             Log.e(TAG, "Error syncing DMs", e)
         }
@@ -243,8 +200,6 @@ class InviteJoinRequestsManager @Inject constructor(
                 message.senderInboxId != client.inboxId
             }
 
-            Log.d(TAG, "Found ${messages.size} messages as possible join requests")
-
             for (message in messages) {
                 val text = try {
                     message.body
@@ -259,12 +214,10 @@ class InviteJoinRequestsManager @Inject constructor(
                 }
 
                 if (SignedInviteValidator.hasExpired(signedInvite)) {
-                    Log.d(TAG, "Invite expired, skipping")
                     continue
                 }
 
                 if (SignedInviteValidator.conversationHasExpired(signedInvite)) {
-                    Log.d(TAG, "Conversation expired, skipping")
                     continue
                 }
 

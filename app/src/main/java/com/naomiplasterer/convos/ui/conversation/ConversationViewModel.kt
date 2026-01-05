@@ -60,6 +60,9 @@ class ConversationViewModel @Inject constructor(
     // Cache full conversation to prevent unnecessary UI updates when only timestamps change
     private var cachedConversation: Conversation? = null
 
+    // Buffer messages that arrive before conversation is loaded
+    private var pendingMessages: List<Message> = emptyList()
+
     init {
         // Register the ExplodeSettings codec
         try {
@@ -187,10 +190,14 @@ class ConversationViewModel @Inject constructor(
 
             _uiState.value = when (currentState) {
                 is ConversationUiState.Success -> currentState.copy(conversation = conversationWithMembers)
-                else -> ConversationUiState.Success(
-                    conversation = conversationWithMembers,
-                    messages = emptyList()
-                )
+                else -> {
+                    // Transitioning from Loading to Success - apply pending messages if any
+                    Log.d(TAG, "Transitioning to Success state with ${pendingMessages.size} pending messages")
+                    ConversationUiState.Success(
+                        conversation = conversationWithMembers,
+                        messages = pendingMessages
+                    )
+                }
             }
         }
     }
@@ -264,7 +271,9 @@ class ConversationViewModel @Inject constructor(
             Log.d(TAG, "💬 Updating UI state with messages (current: ${currentState.messages.size} → new: ${messages.size})")
             _uiState.value = currentState.copy(messages = messages)
         } else {
-            Log.w(TAG, "💬 Cannot update messages - UI state is not Success (state: ${currentState::class.simpleName})")
+            // State is still Loading - buffer messages to apply when conversation loads
+            Log.d(TAG, "💬 Buffering ${messages.size} messages (UI state is ${currentState::class.simpleName})")
+            pendingMessages = messages
         }
     }
 

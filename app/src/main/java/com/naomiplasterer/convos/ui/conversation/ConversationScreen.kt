@@ -298,6 +298,14 @@ private fun ConversationContent(
     ) {
         val listState = rememberLazyListState()
 
+        // Auto-scroll to newest message when list grows
+        LaunchedEffect(messages.size) {
+            if (messages.isNotEmpty()) {
+                // Scroll to index 0 (newest message at bottom due to reverseLayout)
+                listState.animateScrollToItem(index = 0)
+            }
+        }
+
         LazyColumn(
             modifier = Modifier
                 .weight(1f)

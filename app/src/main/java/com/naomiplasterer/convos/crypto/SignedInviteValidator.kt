@@ -107,11 +107,6 @@ object SignedInviteValidator {
             val payloadBytes = signedInvite.payload.toByteArray()
             val signature = signedInvite.signature.toByteArray()
 
-            Log.d(
-                TAG,
-                "Verifying signature - payload size: ${payloadBytes.size}, signature size: ${signature.size}"
-            )
-
             // We sign with secp256k1 wallet private key (65-byte recoverable signature)
             if (signature.size != 65) {
                 Log.e(TAG, "Invalid signature size: ${signature.size}, expected 65 bytes")
@@ -125,8 +120,6 @@ object SignedInviteValidator {
 
             // Hash the payload (same as signing)
             val messageHash = java.security.MessageDigest.getInstance("SHA-256").digest(payloadBytes)
-
-            Log.d(TAG, "Verifying secp256k1 signature with recovery ID: $recoveryId")
 
             // Get the payload to extract creator inbox ID
             val payload = getPayload(signedInvite)
@@ -170,9 +163,6 @@ object SignedInviteValidator {
 
             // Get the recovered public key bytes (uncompressed format)
             val recoveredPubKey = recoveredPoint.getEncoded(false)
-            val recoveredPubKeyHex = recoveredPubKey.joinToString("") { "%02x".format(it) }
-
-            Log.d(TAG, "Recovered public key (first 20 chars): ${recoveredPubKeyHex.take(20)}...")
 
             // For now, we just verify that we can recover A public key
             // TODO: Verify it matches the creator's expected public key from their inbox ID
@@ -184,7 +174,6 @@ object SignedInviteValidator {
                 return false
             }
 
-            Log.d(TAG, "Signature verification successful - recovered valid secp256k1 public key")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Signature verification failed", e)
@@ -200,11 +189,6 @@ object SignedInviteValidator {
 
         // iOS signs the SHA256 hash of the payload bytes, matching iOS exactly
         val messageHash = java.security.MessageDigest.getInstance("SHA-256").digest(payloadBytes)
-
-        Log.d(
-            TAG,
-            "Signing payload with secp256k1 - size: ${payloadBytes.size}, hash: ${messageHash.take(4).joinToString(",") { "%02x".format(it) }}..., tag: ${payload.tag}"
-        )
 
         try {
             // Use BouncyCastle for secp256k1 signing
@@ -290,18 +274,16 @@ object SignedInviteValidator {
                     if (recoveredPoint.affineXCoord.toBigInteger() == pubKeyPoint.affineXCoord.toBigInteger() &&
                         recoveredPoint.affineYCoord.toBigInteger() == pubKeyPoint.affineYCoord.toBigInteger()) {
                         recId = i
-                        Log.d(TAG, "Found recovery ID: $i")
                         break
                     }
                 } catch (e: Exception) {
-                    Log.d(TAG, "Recovery ID $i failed: ${e.message}")
                     // Try next recovery ID
                     continue
                 }
             }
 
             if (recId == -1) {
-                Log.e(TAG, "Failed to calculate recovery ID - none of the 4 options matched")
+                Log.e(TAG, "Failed to calculate recovery ID")
                 throw IllegalStateException("Failed to calculate recovery ID")
             }
 
@@ -310,8 +292,6 @@ object SignedInviteValidator {
             System.arraycopy(rBytes, 0, signature, 0, 32)
             System.arraycopy(sBytes, 0, signature, 32, 32)
             signature[64] = recId.toByte()
-
-            Log.d(TAG, "Generated secp256k1 recoverable signature: ${signature.size} bytes, recId: $recId")
 
             return signature
         } catch (e: Exception) {
