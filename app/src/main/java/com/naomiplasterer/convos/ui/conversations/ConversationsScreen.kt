@@ -9,14 +9,13 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.ui.theme.Spacing
 
@@ -79,6 +78,7 @@ fun ConversationsScreen(
                 is ConversationsUiState.Loading -> {
                     LoadingState()
                 }
+
                 is ConversationsUiState.NoSession -> {
                     // Show the "pop a convo" empty state UI for no session too
                     Box(
@@ -91,6 +91,7 @@ fun ConversationsScreen(
                         )
                     }
                 }
+
                 is ConversationsUiState.Empty -> {
                     // Show the "pop a convo" empty state UI
                     Box(
@@ -103,6 +104,7 @@ fun ConversationsScreen(
                         )
                     }
                 }
+
                 is ConversationsUiState.Success -> {
                     val shouldShowCTA = state.conversations.size == 1 && !hasCreatedMoreThanOneConvo
 
@@ -115,10 +117,10 @@ fun ConversationsScreen(
                             viewModel.selectConversation(it.id)
                             onConversationClick(it.id)
                         },
-                        onDeleteClick = { viewModel.deleteConversation(it.id) },
-                        onRefresh = { viewModel.syncConversations() }
+                        onDeleteClick = { viewModel.deleteConversation(it.id) }
                     )
                 }
+
                 is ConversationsUiState.Syncing -> {
                     val shouldShowCTA = state.conversations.size == 1 && !hasCreatedMoreThanOneConvo
 
@@ -132,10 +134,10 @@ fun ConversationsScreen(
                             onConversationClick(it.id)
                         },
                         onDeleteClick = { viewModel.deleteConversation(it.id) },
-                        onRefresh = { viewModel.syncConversations() },
                         isSyncing = true
                     )
                 }
+
                 is ConversationsUiState.Error -> {
                     ErrorState(
                         message = state.message,
@@ -152,7 +154,6 @@ private fun ConversationsList(
     conversations: List<Conversation>,
     onConversationClick: (Conversation) -> Unit,
     onDeleteClick: (Conversation) -> Unit,
-    onRefresh: () -> Unit,
     showCTA: Boolean = false,
     onStartConvo: () -> Unit = {},
     onJoinConvo: () -> Unit = {},
@@ -197,31 +198,6 @@ private fun LoadingState() {
         contentAlignment = Alignment.Center
     ) {
         CircularProgressIndicator()
-    }
-}
-
-@Composable
-private fun NoSessionState() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Spacing.step4x)
-        ) {
-            Text(
-                text = "No Active Session",
-                style = MaterialTheme.typography.headlineSmall,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = "Please create or select an account to continue",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-        }
     }
 }
 

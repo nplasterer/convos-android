@@ -4,32 +4,28 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.naomiplasterer.convos.crypto.SignedInviteValidator
+import com.naomiplasterer.convos.data.local.dao.MemberProfileDao
 import com.naomiplasterer.convos.data.repository.ConversationRepository
 import com.naomiplasterer.convos.data.repository.MessageRepository
 import com.naomiplasterer.convos.data.session.SessionManager
 import com.naomiplasterer.convos.data.xmtp.XMTPClientManager
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.Message
-import com.naomiplasterer.convos.proto.InviteProtos
+import com.naomiplasterer.convos.domain.model.meaningfullyEquals
 import com.naomiplasterer.convos.proto.ConversationMetadataProtos
-import com.naomiplasterer.convos.codecs.ContentTypeExplodeSettings
-import com.naomiplasterer.convos.codecs.ExplodeSettings
 import com.naomiplasterer.convos.codecs.ExplodeSettingsCodec
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import android.util.Log
 import org.xmtp.android.library.Client
-import org.xmtp.android.library.SendOptions
-import org.xmtp.android.library.Conversation as XMTPConversation
-import java.util.Date
 import java.util.UUID
 import javax.inject.Inject
-import kotlin.time.Duration.Companion.seconds
 
 private const val TAG = "ConversationViewModel"
 
@@ -39,7 +35,8 @@ class ConversationViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
     private val messageRepository: MessageRepository,
     private val sessionManager: SessionManager,
-    private val xmtpClientManager: XMTPClientManager
+    private val xmtpClientManager: XMTPClientManager,
+    private val memberProfileDao: MemberProfileDao
 ) : ViewModel() {
 
     private val conversationId: String = checkNotNull(savedStateHandle["conversationId"])
@@ -56,12 +53,12 @@ class ConversationViewModel @Inject constructor(
     private val _isSending = MutableStateFlow(false)
     val isSending: StateFlow<Boolean> = _isSending.asStateFlow()
 
-    private val _explodeState = MutableStateFlow<ExplodeState>(ExplodeState.Ready)
-    val explodeState: StateFlow<ExplodeState> = _explodeState.asStateFlow()
+    // Cache members to prevent creating new objects on every Flow emission
+    private var cachedMembers: List<com.naomiplasterer.convos.domain.model.Member> = emptyList()
+    private var cachedMemberCount: Int = 0
 
-    // Track if current user is the conversation creator
-    private val _isCreator = MutableStateFlow(false)
-    val isCreator: StateFlow<Boolean> = _isCreator.asStateFlow()
+    // Cache full conversation to prevent unnecessary UI updates when only timestamps change
+    private var cachedConversation: Conversation? = null
 
     init {
         // Register the ExplodeSettings codec
@@ -69,7 +66,10 @@ class ConversationViewModel @Inject constructor(
             Client.register(ExplodeSettingsCodec())
         } catch (e: Exception) {
             // Codec might already be registered, that's ok
-            Log.d(TAG, "ExplodeSettings codec already registered or registration failed: ${e.message}")
+            Log.d(
+                TAG,
+                "ExplodeSettings codec already registered or registration failed: ${e.message}"
+            )
         }
         loadConversation()
         loadMessages()
@@ -78,52 +78,119 @@ class ConversationViewModel @Inject constructor(
 
     private fun syncAndStartStreaming() {
         viewModelScope.launch {
-            val inboxId = sessionManager.getCurrentInboxId()
-            if (inboxId != null) {
-                // First sync existing messages from the network
-                Log.d(TAG, "Syncing messages for conversation: $conversationId")
-                messageRepository.syncMessages(inboxId, conversationId).fold(
+            // Wait for conversation to load to get the correct inboxId
+            val conversation = conversationRepository.getConversation(conversationId).first()
+            if (conversation != null) {
+                val inboxId = conversation.inboxId
+
+                // Ensure client is loaded for this inbox
+                sessionManager.ensureClientLoaded(inboxId).fold(
                     onSuccess = {
-                        Log.d(TAG, "Messages synced successfully, starting streaming")
+                        // First sync existing messages from the network
+                        Log.d(TAG, "Syncing messages for conversation: $conversationId with inbox: $inboxId")
+                        messageRepository.syncMessages(inboxId, conversationId).fold(
+                            onSuccess = {
+                                Log.d(TAG, "Messages synced successfully, starting streaming")
+                            },
+                            onFailure = { error ->
+                                Log.e(TAG, "Failed to sync messages", error)
+                            }
+                        )
+
+                        // Then start streaming for new messages
+                        messageRepository.startMessageStreaming(inboxId, conversationId)
                     },
                     onFailure = { error ->
-                        Log.e(TAG, "Failed to sync messages", error)
+                        Log.e(TAG, "Failed to ensure client loaded for inbox: $inboxId", error)
                     }
                 )
-
-                // Then start streaming for new messages
-                messageRepository.startMessageStreaming(inboxId, conversationId)
             }
         }
     }
 
     private fun loadConversation() {
         viewModelScope.launch {
-            conversationRepository.getConversation(conversationId).collectLatest { conversation ->
-                if (conversation != null) {
-                    updateUiStateWithConversation(conversation)
-                } else {
-                    _uiState.value = ConversationUiState.Error("Conversation not found")
+            conversationRepository.getConversation(conversationId)
+                .distinctUntilChanged() // Only update when conversation actually changes
+                .collectLatest { conversation ->
+                    if (conversation != null) {
+                        updateUiStateWithConversation(conversation)
+                    } else {
+                        _uiState.value = ConversationUiState.Error("Conversation not found")
+                    }
                 }
-            }
         }
     }
 
     private fun loadMessages() {
         viewModelScope.launch {
-            messageRepository.getMessages(conversationId).collectLatest { messages ->
-                updateUiStateWithMessages(messages)
-            }
+            messageRepository.getMessages(conversationId)
+                .distinctUntilChanged { old, new ->
+                    // Only compare message IDs - if the IDs are the same, it's the same list of messages
+                    // This prevents updates when only metadata (like deliveredAt) changes
+                    val oldIds = old.map { it.id }
+                    val newIds = new.map { it.id }
+                    oldIds == newIds
+                }
+                .collectLatest { messages ->
+                    Log.d(TAG, "💬 Messages Flow emitted: ${messages.size} messages")
+                    updateUiStateWithMessages(messages)
+                }
         }
     }
 
     private fun updateUiStateWithConversation(conversation: Conversation) {
         viewModelScope.launch {
-            val conversationWithMembers = loadConversationMembers(conversation)
+            // If incoming conversation has no members, preserve cached members for comparison
+            val conversationForComparison = if (conversation.members.isEmpty() && cachedConversation != null) {
+                conversation.copy(members = cachedConversation!!.members)
+            } else {
+                conversation
+            }
+
+            // Determine which conversation object to use in UI state
+            val conversationWithMembers = if (cachedConversation != null && conversationForComparison.meaningfullyEquals(cachedConversation)) {
+                // Conversation hasn't meaningfully changed - reuse the EXACT same cached object
+                // This prevents Compose from seeing a "new" object and recomposing unnecessarily
+                Log.d(TAG, "Conversation hasn't meaningfully changed, reusing cached conversation object")
+                cachedConversation!! // Use the exact same reference
+            } else {
+                // Conversation has changed - determine if we need to reload members
+                val updated = if (conversationForComparison.members.isNotEmpty() &&
+                                  conversationForComparison.members.size != cachedMemberCount) {
+                    // Member count changed, reload
+                    Log.d(TAG, "Member count changed (${cachedMemberCount} → ${conversationForComparison.members.size}), reloading members...")
+                    loadConversationMembers(conversation)
+                } else if (cachedMembers.isEmpty()) {
+                    // First load
+                    Log.d(TAG, "First load, fetching members...")
+                    loadConversationMembers(conversation)
+                } else {
+                    // Reuse cached members
+                    Log.d(TAG, "Reusing cached members (count: ${cachedMembers.size})")
+                    conversation.copy(members = cachedMembers)
+                }
+
+                // Cache the full conversation
+                cachedConversation = updated
+                updated
+            }
+
+            // Only update UI state if the conversation object is different from what's currently in the state
+            // This prevents creating new UI state objects when nothing has changed
             val currentState = _uiState.value
+            if (currentState is ConversationUiState.Success && currentState.conversation === conversationWithMembers) {
+                // Same conversation object reference - don't update to avoid triggering recomposition
+                Log.d(TAG, "UI state already has this conversation object, skipping update")
+                return@launch
+            }
+
             _uiState.value = when (currentState) {
                 is ConversationUiState.Success -> currentState.copy(conversation = conversationWithMembers)
-                else -> ConversationUiState.Success(conversation = conversationWithMembers, messages = emptyList())
+                else -> ConversationUiState.Success(
+                    conversation = conversationWithMembers,
+                    messages = emptyList()
+                )
             }
         }
     }
@@ -135,19 +202,44 @@ class ConversationViewModel @Inject constructor(
             val group = client.conversations.findGroup(conversation.id) ?: return conversation
             val xmtpMembers = group.members()
 
-            // Check if current user is the creator
-            val creatorInboxId = group.addedByInboxId()
-            _isCreator.value = creatorInboxId == client.inboxId
+            // Load member profiles from database
+            Log.d(TAG, "👥 Loading member profiles for conversation: ${conversation.id}")
+            val profiles = memberProfileDao.getProfilesForConversation(conversation.id)
+            Log.d(TAG, "   Found ${profiles.size} profiles in database")
 
+            for (profile in profiles) {
+                Log.d(
+                    TAG,
+                    "   Profile: inboxId=${profile.inboxId.take(8)}..., name=${profile.name}"
+                )
+            }
+
+            val profileMap = profiles.associateBy { it.inboxId }
+
+            Log.d(TAG, "   XMTP members count: ${xmtpMembers.size}")
             val members = xmtpMembers.map { xmtpMember ->
+                val profile = profileMap[xmtpMember.inboxId]
+                Log.d(
+                    TAG,
+                    "   Member ${xmtpMember.inboxId.take(8)}: profile found=${profile != null}, name=${profile?.name}"
+                )
+
                 com.naomiplasterer.convos.domain.model.Member(
                     inboxId = xmtpMember.inboxId,
                     addresses = listOf(xmtpMember.inboxId.take(8)),
                     permissionLevel = com.naomiplasterer.convos.domain.model.PermissionLevel.MEMBER,
                     consentState = com.naomiplasterer.convos.domain.model.ConsentState.ALLOWED,
-                    addedAt = System.currentTimeMillis()
+                    addedAt = System.currentTimeMillis(),
+                    name = profile?.name,
+                    imageUrl = profile?.avatar
                 )
             }
+
+            Log.d(TAG, "✅ Loaded ${members.size} members with profiles")
+
+            // Cache the members and member count
+            cachedMembers = members
+            cachedMemberCount = members.size
 
             conversation.copy(members = members)
         } catch (e: Exception) {
@@ -157,9 +249,22 @@ class ConversationViewModel @Inject constructor(
     }
 
     private fun updateUiStateWithMessages(messages: List<Message>) {
+        Log.d(TAG, "💬 updateUiStateWithMessages called with ${messages.size} messages")
         val currentState = _uiState.value
         if (currentState is ConversationUiState.Success) {
+            // CRITICAL FIX: Prevent messages from disappearing due to Room Flow emitting stale/partial data
+            // This happens when:
+            // 1. Conversation table updates trigger messages Flow (foreign key) with 0 messages
+            // 2. Message stream inserts trigger Flow with only the newly inserted message visible
+            if (messages.size < currentState.messages.size) {
+                Log.w(TAG, "💬 IGNORING incomplete message list - Room emitted stale/partial data (had ${currentState.messages.size}, got ${messages.size} messages)")
+                return
+            }
+
+            Log.d(TAG, "💬 Updating UI state with messages (current: ${currentState.messages.size} → new: ${messages.size})")
             _uiState.value = currentState.copy(messages = messages)
+        } else {
+            Log.w(TAG, "💬 Cannot update messages - UI state is not Success (state: ${currentState::class.simpleName})")
         }
     }
 
@@ -177,9 +282,16 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             _isSending.value = true
 
-            val inboxId = sessionManager.getCurrentInboxId()
+            // Get the conversation's inboxId from current UI state
+            val currentState = _uiState.value
+            val inboxId = if (currentState is ConversationUiState.Success) {
+                currentState.conversation.inboxId
+            } else {
+                null
+            }
+
             if (inboxId == null) {
-                Log.e(TAG, "Cannot send message: no active inbox")
+                Log.e(TAG, "Cannot send message: conversation not loaded")
                 _isSending.value = false
                 return@launch
             }
@@ -205,7 +317,18 @@ class ConversationViewModel @Inject constructor(
 
     fun syncMessages() {
         viewModelScope.launch {
-            val inboxId = sessionManager.getCurrentInboxId() ?: return@launch
+            // Get the conversation's inboxId from current UI state
+            val currentState = _uiState.value
+            val inboxId = if (currentState is ConversationUiState.Success) {
+                currentState.conversation.inboxId
+            } else {
+                null
+            }
+
+            if (inboxId == null) {
+                Log.e(TAG, "Cannot sync messages: conversation not loaded")
+                return@launch
+            }
 
             messageRepository.syncMessages(inboxId, conversationId).fold(
                 onSuccess = {
@@ -224,125 +347,6 @@ class ConversationViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Explodes the conversation by:
-     * 1. Sending an ExplodeSettings message to notify all members
-     * 2. Removing all members from the group
-     * 3. Setting consent to DENIED to hide the conversation
-     * 4. Leaving the conversation
-     */
-    fun explodeConversation() {
-        if (_explodeState.value != ExplodeState.Ready) return
-
-        viewModelScope.launch {
-            try {
-                _explodeState.value = ExplodeState.Exploding
-
-                val state = _uiState.value
-                if (state !is ConversationUiState.Success) {
-                    _explodeState.value = ExplodeState.Error("Invalid conversation state")
-                    return@launch
-                }
-
-                val inboxId = sessionManager.getCurrentInboxId()
-                if (inboxId == null) {
-                    _explodeState.value = ExplodeState.Error("No active inbox")
-                    return@launch
-                }
-
-                val client = xmtpClientManager.getClient(inboxId)
-                if (client == null) {
-                    _explodeState.value = ExplodeState.Error("No XMTP client")
-                    return@launch
-                }
-
-                val group = client.conversations.findGroup(conversationId)
-                if (group == null) {
-                    _explodeState.value = ExplodeState.Error("Group not found")
-                    return@launch
-                }
-
-                // Send ExplodeSettings message to notify all members
-                val expiresAt = Date()
-                val explodeSettings = ExplodeSettings(expiresAt = expiresAt)
-
-                Log.d(TAG, "Sending ExplodeSettings message...")
-                withTimeout(20.seconds) {
-                    group.send(
-                        content = explodeSettings,
-                        options = SendOptions(contentType = ContentTypeExplodeSettings)
-                    )
-                }
-                Log.d(TAG, "ExplodeSettings message sent successfully")
-
-                // Remove all members from the group
-                val members = group.members()
-                val memberInboxIds = members.map { it.inboxId }
-                    .filter { it != client.inboxId } // Don't remove self yet
-
-                if (memberInboxIds.isNotEmpty()) {
-                    group.removeMembers(memberInboxIds)
-                    Log.d(TAG, "Removed ${memberInboxIds.size} members from group")
-                }
-
-                // Update consent to DENIED to hide the conversation
-                group.updateConsentState(org.xmtp.android.library.ConsentState.DENIED)
-                conversationRepository.updateConsent(conversationId, com.naomiplasterer.convos.domain.model.ConsentState.DENIED)
-
-                _explodeState.value = ExplodeState.Exploded
-
-                // Leave the conversation
-                group.leaveGroup()
-
-                // Delete the conversation locally
-                conversationRepository.deleteConversation(conversationId)
-
-                Log.d(TAG, "Conversation exploded successfully")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error exploding conversation", e)
-                _explodeState.value = ExplodeState.Error(e.message ?: "Failed to explode conversation")
-            }
-        }
-    }
-
-    fun leaveConversation() {
-        viewModelScope.launch {
-            try {
-                val state = _uiState.value
-                if (state !is ConversationUiState.Success) return@launch
-
-                val inboxId = sessionManager.getCurrentInboxId()
-                if (inboxId == null) {
-                    Log.e(TAG, "Cannot leave: no active inbox")
-                    return@launch
-                }
-
-                val client = xmtpClientManager.getClient(inboxId)
-                if (client == null) {
-                    Log.e(TAG, "Cannot leave: no XMTP client")
-                    return@launch
-                }
-
-                val group = client.conversations.findGroup(conversationId)
-                if (group != null) {
-                    // Leave the group
-                    group.leaveGroup()
-                    Log.d(TAG, "Left group successfully")
-                }
-
-                // Update consent to hide the conversation
-                conversationRepository.updateConsent(conversationId, com.naomiplasterer.convos.domain.model.ConsentState.DENIED)
-
-                // Delete the conversation locally
-                conversationRepository.deleteConversation(conversationId)
-
-                Log.d(TAG, "Left conversation: $conversationId")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error leaving conversation", e)
-            }
-        }
-    }
-
     fun deleteConversation() {
         viewModelScope.launch {
             conversationRepository.deleteConversation(conversationId)
@@ -355,9 +359,16 @@ class ConversationViewModel @Inject constructor(
             try {
                 Log.d(TAG, "Generating invite code for conversation: $conversationId")
 
-                val inboxId = sessionManager.getCurrentInboxId()
+                // Get the conversation's inboxId from current UI state
+                val currentState = _uiState.value
+                val inboxId = if (currentState is ConversationUiState.Success) {
+                    currentState.conversation.inboxId
+                } else {
+                    null
+                }
+
                 if (inboxId == null) {
-                    Log.e(TAG, "Cannot generate invite: no active inbox")
+                    Log.e(TAG, "Cannot generate invite: conversation not loaded")
                     return@launch
                 }
 
@@ -376,7 +387,8 @@ class ConversationViewModel @Inject constructor(
 
                 // Get conversation details from current state
                 val state = _uiState.value
-                val conversation = if (state is ConversationUiState.Success) state.conversation else null
+                val conversation =
+                    if (state is ConversationUiState.Success) state.conversation else null
 
                 // Try to retrieve existing tag from group metadata, or generate new one
                 val inviteTag = try {
@@ -387,7 +399,10 @@ class ConversationViewModel @Inject constructor(
                     } else {
                         groupDescription.toByteArray()
                     }
-                    val customMetadata = ConversationMetadataProtos.ConversationCustomMetadata.parseFrom(metadataBytes)
+                    val customMetadata =
+                        ConversationMetadataProtos.ConversationCustomMetadata.parseFrom(
+                            metadataBytes
+                        )
                     Log.d(TAG, "Found existing tag in group metadata: ${customMetadata.tag}")
                     customMetadata.tag
                 } catch (e: Exception) {
@@ -396,8 +411,9 @@ class ConversationViewModel @Inject constructor(
                     Log.d(TAG, "No existing tag found, generating new tag: $newTag")
 
                     // Create metadata with the tag
-                    val metadataBuilder = ConversationMetadataProtos.ConversationCustomMetadata.newBuilder()
-                        .setTag(newTag)
+                    val metadataBuilder =
+                        ConversationMetadataProtos.ConversationCustomMetadata.newBuilder()
+                            .setTag(newTag)
 
                     // ConversationCustomMetadata only has: tag, profiles, expiresAtUnix
                     // Other fields (name, description, imageURL) are in the InvitePayload
@@ -418,10 +434,18 @@ class ConversationViewModel @Inject constructor(
                     newTag
                 }
 
+                // Get the actual secp256k1 private key for this inbox
+                val privateKey = xmtpClientManager.getPrivateKeyData(inboxId)
+                if (privateKey == null) {
+                    Log.e(TAG, "Cannot generate invite: no private key for inbox")
+                    return@launch
+                }
+
                 // Create signed invite
                 val signedInvite = SignedInviteValidator.createSignedInvite(
                     conversationId = conversationId,
                     creatorInboxId = inboxId,
+                    privateKey = privateKey,
                     client = client,
                     inviteTag = inviteTag,
                     name = conversation?.name,
@@ -450,12 +474,6 @@ sealed class ConversationUiState {
         val conversation: Conversation,
         val messages: List<Message>
     ) : ConversationUiState()
-    data class Error(val message: String) : ConversationUiState()
-}
 
-sealed class ExplodeState {
-    object Ready : ExplodeState()
-    object Exploding : ExplodeState()
-    object Exploded : ExplodeState()
-    data class Error(val message: String) : ExplodeState()
+    data class Error(val message: String) : ConversationUiState()
 }

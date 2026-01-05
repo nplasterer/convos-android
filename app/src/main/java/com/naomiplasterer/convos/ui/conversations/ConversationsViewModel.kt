@@ -8,15 +8,19 @@ import com.naomiplasterer.convos.data.session.SessionManager
 import com.naomiplasterer.convos.data.session.SessionState
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.ConsentState
+import com.naomiplasterer.convos.domain.model.meaningfullyEquals
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import android.util.Log
 import javax.inject.Inject
+import androidx.core.content.edit
 
 private const val TAG = "ConversationsViewModel"
 
@@ -31,7 +35,6 @@ class ConversationsViewModel @Inject constructor(
     val uiState: StateFlow<ConversationsUiState> = _uiState.asStateFlow()
 
     private val _selectedConversationId = MutableStateFlow<String?>(null)
-    val selectedConversationId: StateFlow<String?> = _selectedConversationId.asStateFlow()
 
     private val prefs = context.getSharedPreferences("convos_prefs", Context.MODE_PRIVATE)
 
@@ -40,8 +43,10 @@ class ConversationsViewModel @Inject constructor(
     )
     val hasCreatedMoreThanOneConvo: StateFlow<Boolean> = _hasCreatedMoreThanOneConvo.asStateFlow()
 
+
     init {
         observeSession()
+        startPeriodicSync()
     }
 
     private fun observeSession() {
@@ -51,12 +56,15 @@ class ConversationsViewModel @Inject constructor(
                     is SessionState.Active -> {
                         loadAllConversations()
                     }
+
                     is SessionState.NoSession -> {
                         _uiState.value = ConversationsUiState.NoSession
                     }
+
                     is SessionState.Creating -> {
                         _uiState.value = ConversationsUiState.Loading
                     }
+
                     is SessionState.Error -> {
                         _uiState.value = ConversationsUiState.Error(sessionState.message)
                     }
@@ -69,42 +77,53 @@ class ConversationsViewModel @Inject constructor(
         try {
             Log.d(TAG, "loadAllConversations: Starting to load conversations from all inboxes")
 
+            // First, clean up any expired inboxes
+            conversationRepository.cleanupExpiredInboxes()
+
             // Get all inbox IDs
             val allInboxIds = sessionManager.getAllInboxIds()
             Log.d(TAG, "loadAllConversations: Found ${allInboxIds.size} inboxes")
 
-            // Lazy load clients and sync conversations for all inboxes
+            if (allInboxIds.isEmpty()) {
+                _uiState.value = ConversationsUiState.Empty
+                return
+            }
+
+            // First, sync conversations from the network
             for (inboxId in allInboxIds) {
                 // Ensure client is loaded before syncing
-                Log.d(TAG, "loadAllConversations: Ensuring client loaded for inbox: $inboxId")
                 sessionManager.ensureClientLoaded(inboxId).fold(
                     onSuccess = {
-                        Log.d(TAG, "loadAllConversations: Client ready, syncing conversations for inbox: $inboxId")
                         conversationRepository.syncConversations(inboxId).fold(
                             onSuccess = {
-                                Log.d(TAG, "loadAllConversations: Sync completed for inbox: $inboxId")
+                                Log.d(
+                                    TAG,
+                                    "loadAllConversations: Sync completed for inbox: $inboxId"
+                                )
                             },
                             onFailure = { error ->
-                                Log.e(TAG, "loadAllConversations: Sync failed for inbox: $inboxId", error)
-                                // Continue with other inboxes even if one fails
+                                Log.e(
+                                    TAG,
+                                    "loadAllConversations: Sync failed for inbox: $inboxId",
+                                    error
+                                )
                             }
                         )
                         // Start streaming for real-time updates
                         conversationRepository.startConversationStreaming(inboxId)
                     },
                     onFailure = { error ->
-                        Log.e(TAG, "loadAllConversations: Failed to load client for inbox: $inboxId", error)
-                        // Continue with other inboxes even if one fails
+                        Log.e(
+                            TAG,
+                            "loadAllConversations: Failed to load client for inbox: $inboxId",
+                            error
+                        )
                     }
                 )
             }
 
-            // Observe conversations from all inboxes
-            if (allInboxIds.isNotEmpty()) {
-                observeAllConversations(allInboxIds)
-            } else {
-                _uiState.value = ConversationsUiState.Empty
-            }
+            // Now observe conversations from local DB
+            observeAllConversations(allInboxIds)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load all conversations", e)
             _uiState.value = ConversationsUiState.Error(e.message ?: "Unknown error")
@@ -113,72 +132,36 @@ class ConversationsViewModel @Inject constructor(
 
     private suspend fun observeAllConversations(inboxIds: List<String>) {
         // Combine conversations from all inboxes
-        conversationRepository.getConversationsFromAllInboxes(inboxIds).collectLatest { allConversations ->
-            Log.d(TAG, "observeAllConversations: Received ${allConversations.size} total conversations")
-
-            if (allConversations.size > 1 && !_hasCreatedMoreThanOneConvo.value) {
-                _hasCreatedMoreThanOneConvo.value = true
-                prefs.edit().putBoolean("hasCreatedMoreThanOneConvo", true).apply()
+        conversationRepository.getConversationsFromAllInboxes(inboxIds)
+            .distinctUntilChanged { old, new ->
+                // Use meaningful equality to prevent updates when only timestamps change
+                old.meaningfullyEquals(new)
             }
-
-            if (allConversations.isEmpty()) {
-                Log.d(TAG, "observeAllConversations: No conversations, setting Empty state")
-                _uiState.value = ConversationsUiState.Empty
-            } else {
-                Log.d(TAG, "observeAllConversations: Setting Success state with ${allConversations.size} conversations")
-                allConversations.forEach { convo ->
-                    Log.d(TAG, "  - ${convo.id}: ${convo.name ?: "Untitled"}")
-                }
-                _uiState.value = ConversationsUiState.Success(allConversations)
-            }
-        }
-    }
-
-    private fun loadConversations(inboxId: String) {
-        viewModelScope.launch {
-            try {
-                Log.d(TAG, "loadConversations: Starting for inbox: $inboxId")
-
-                // First, sync conversations from the network
-                Log.d(TAG, "loadConversations: Syncing conversations from network")
-                conversationRepository.syncConversations(inboxId).fold(
-                    onSuccess = {
-                        Log.d(TAG, "loadConversations: Initial sync completed successfully")
-                    },
-                    onFailure = { error ->
-                        Log.e(TAG, "loadConversations: Initial sync failed", error)
-                        // Continue anyway - we'll show what's in local DB
-                    }
+            .collectLatest { allConversations ->
+                Log.d(
+                    TAG,
+                    "observeAllConversations: Received ${allConversations.size} total conversations"
                 )
 
-                // Start streaming for real-time updates
-                conversationRepository.startConversationStreaming(inboxId)
-
-                // Now observe conversations from local DB
-                conversationRepository.getConversations(inboxId).collectLatest { conversations ->
-                    Log.d(TAG, "loadConversations: Received ${conversations.size} conversations from repository")
-
-                    if (conversations.size > 1 && !_hasCreatedMoreThanOneConvo.value) {
-                        _hasCreatedMoreThanOneConvo.value = true
-                        prefs.edit().putBoolean("hasCreatedMoreThanOneConvo", true).apply()
-                    }
-
-                    if (conversations.isEmpty()) {
-                        Log.d(TAG, "loadConversations: No conversations, setting Empty state")
-                        _uiState.value = ConversationsUiState.Empty
-                    } else {
-                        Log.d(TAG, "loadConversations: Setting Success state with ${conversations.size} conversations")
-                        conversations.forEach { convo ->
-                            Log.d(TAG, "  - ${convo.id}: ${convo.name ?: "Untitled"}")
-                        }
-                        _uiState.value = ConversationsUiState.Success(conversations)
-                    }
+                if (allConversations.size > 1 && !_hasCreatedMoreThanOneConvo.value) {
+                    _hasCreatedMoreThanOneConvo.value = true
+                    prefs.edit { putBoolean("hasCreatedMoreThanOneConvo", true) }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load conversations", e)
-                _uiState.value = ConversationsUiState.Error(e.message ?: "Unknown error")
+
+                if (allConversations.isEmpty()) {
+                    Log.d(TAG, "observeAllConversations: No conversations, setting Empty state")
+                    _uiState.value = ConversationsUiState.Empty
+                } else {
+                    Log.d(
+                        TAG,
+                        "observeAllConversations: Setting Success state with ${allConversations.size} conversations"
+                    )
+                    allConversations.forEach { convo ->
+                        Log.d(TAG, "  - ${convo.id}: ${convo.name ?: "Untitled"}")
+                    }
+                    _uiState.value = ConversationsUiState.Success(allConversations)
+                }
             }
-        }
     }
 
     fun syncConversations() {
@@ -210,20 +193,45 @@ class ConversationsViewModel @Inject constructor(
 
     fun deleteConversation(conversationId: String) {
         viewModelScope.launch {
+            // Set consent to DENIED
             conversationRepository.updateConsent(conversationId, ConsentState.DENIED)
             Log.d(TAG, "Conversation deleted: $conversationId")
+
+            // Clean up the inbox for this conversation since we only use one inbox per conversation
+            conversationRepository.cleanupInboxForConversation(conversationId)
         }
     }
 
-    fun pinConversation(conversationId: String, isPinned: Boolean) {
+    /**
+     * Start periodic syncing to process incoming join requests.
+     * This ensures that when someone sends a join request, the creator
+     * will process it within 30 seconds even if they're not actively using the app.
+     */
+    private fun startPeriodicSync() {
         viewModelScope.launch {
-            conversationRepository.updatePinned(conversationId, isPinned)
-        }
-    }
+            while (true) {
+                delay(30_000) // Sync every 30 seconds (reduced frequency to minimize UI updates)
 
-    fun markAsRead(conversationId: String) {
-        viewModelScope.launch {
-            conversationRepository.updateUnread(conversationId, false)
+                // Only sync if we have an active session
+                val sessionState = sessionManager.sessionState.value
+                if (sessionState is SessionState.Active) {
+                    try {
+                        val allInboxIds = sessionManager.getAllInboxIds()
+                        for (inboxId in allInboxIds) {
+                            conversationRepository.syncConversations(inboxId).fold(
+                                onSuccess = {
+                                    Log.d(TAG, "Periodic sync completed for inbox: $inboxId")
+                                },
+                                onFailure = { error ->
+                                    Log.e(TAG, "Periodic sync failed for inbox: $inboxId", error)
+                                }
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error during periodic sync", e)
+                    }
+                }
+            }
         }
     }
 }

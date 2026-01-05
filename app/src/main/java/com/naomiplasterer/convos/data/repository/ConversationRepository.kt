@@ -3,11 +3,10 @@ package com.naomiplasterer.convos.data.repository
 import com.naomiplasterer.convos.data.invite.InviteJoinRequestsManager
 import com.naomiplasterer.convos.data.local.dao.ConversationDao
 import com.naomiplasterer.convos.data.local.dao.InboxDao
-import com.naomiplasterer.convos.data.local.dao.MemberDao
 import com.naomiplasterer.convos.data.local.dao.MemberProfileDao
 import com.naomiplasterer.convos.data.local.entity.MemberProfileEntity
-import com.naomiplasterer.convos.data.mapper.toEntity
 import com.naomiplasterer.convos.data.mapper.toDomain
+import com.naomiplasterer.convos.data.mapper.toEntity
 import com.naomiplasterer.convos.data.xmtp.XMTPClientManager
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.ConsentState
@@ -16,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.xmtp.android.library.Conversation as XMTPConversation
@@ -29,7 +29,6 @@ private const val TAG = "ConversationRepository"
 class ConversationRepository @Inject constructor(
     private val conversationDao: ConversationDao,
     private val inboxDao: InboxDao,
-    private val memberDao: MemberDao,
     private val memberProfileDao: MemberProfileDao,
     private val xmtpClientManager: XMTPClientManager,
     private val inviteJoinRequestsManager: InviteJoinRequestsManager
@@ -39,9 +38,15 @@ class ConversationRepository @Inject constructor(
     fun getConversations(inboxId: String): Flow<List<Conversation>> {
         return conversationDao.getAllowedConversations(inboxId)
             .map { entities ->
-                Log.d(TAG, "getConversations: Found ${entities.size} allowed conversations for inbox: $inboxId")
+                Log.d(
+                    TAG,
+                    "getConversations: Found ${entities.size} allowed conversations for inbox: $inboxId"
+                )
                 entities.forEach { entity ->
-                    Log.d(TAG, "  - Conversation ${entity.id}: consent=${entity.consent}, isDraft=${entity.isDraft}, name=${entity.name}")
+                    Log.d(
+                        TAG,
+                        "  - Conversation ${entity.id}: consent=${entity.consent}, isDraft=${entity.isDraft}, name=${entity.name}"
+                    )
                 }
                 entities.map { it.toDomain() }
             }
@@ -52,10 +57,28 @@ class ConversationRepository @Inject constructor(
             .map { it?.toDomain() }
     }
 
+    suspend fun findConversationByTag(tag: String): Conversation? {
+        return try {
+            val entity = conversationDao.findConversationByTag(tag)
+            val result = entity?.toDomain()
+            Log.d(
+                TAG,
+                "findConversationByTag: tag='$tag', found=${result != null}, conversationId=${result?.id}"
+            )
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding conversation by tag: $tag", e)
+            null
+        }
+    }
+
     fun getConversationsFromAllInboxes(inboxIds: List<String>): Flow<List<Conversation>> {
         return conversationDao.getAllowedConversationsFromAllInboxes(inboxIds)
             .map { entities ->
-                Log.d(TAG, "getConversationsFromAllInboxes: Found ${entities.size} allowed conversations from ${inboxIds.size} inboxes")
+                Log.d(
+                    TAG,
+                    "getConversationsFromAllInboxes: Found ${entities.size} allowed conversations from ${inboxIds.size} inboxes"
+                )
                 entities.map { it.toDomain() }
             }
             .catch { e ->
@@ -71,6 +94,24 @@ class ConversationRepository @Inject constructor(
 
             client.conversations.sync()
 
+            // Process any incoming join requests (creator-side invite processing)
+            try {
+                Log.d(TAG, "Processing join requests for inbox: $inboxId")
+                val joinRequests = inviteJoinRequestsManager.processJoinRequests(client)
+                if (joinRequests.isNotEmpty()) {
+                    Log.d(TAG, "Processed ${joinRequests.size} join requests for inbox: $inboxId")
+                    joinRequests.forEach { request ->
+                        Log.d(
+                            TAG,
+                            "  - Added user to conversation: ${request.conversationId}, name: ${request.conversationName}"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to process join requests for inbox: $inboxId", e)
+                // Don't fail the entire sync if join request processing fails
+            }
+
             val conversations = client.conversations.list()
             val clientId = client.installationId
 
@@ -85,9 +126,15 @@ class ConversationRepository @Inject constructor(
                 var expiresAt: Long? = null
                 if (conversation is org.xmtp.android.library.Conversation.Group) {
                     try {
-                        val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversation)
+                        val metadata =
+                            com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(
+                                conversation
+                            )
                         if (metadata != null) {
-                            Log.d(TAG, "Extracted metadata from group ${conversation.id}: tag=${metadata.tag}, profiles=${metadata.profilesCount}")
+                            Log.d(
+                                TAG,
+                                "Extracted metadata from group ${conversation.id}: tag=${metadata.tag}, profiles=${metadata.profilesCount}"
+                            )
 
                             // Extract expiresAt if present
                             if (metadata.hasExpiresAtUnix() && metadata.expiresAtUnix > 0) {
@@ -95,7 +142,10 @@ class ConversationRepository @Inject constructor(
                             }
 
                             // Store member profiles to database
-                            val profiles = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.extractProfiles(metadata)
+                            val profiles =
+                                com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.extractProfiles(
+                                    metadata
+                                )
                             val profileEntities = profiles.map { (inboxId, profile) ->
                                 MemberProfileEntity(
                                     conversationId = conversation.id,
@@ -105,7 +155,10 @@ class ConversationRepository @Inject constructor(
                                 )
                             }
                             memberProfileDao.insertAll(profileEntities)
-                            Log.d(TAG, "Stored ${profileEntities.size} member profiles to database for conversation ${conversation.id}")
+                            Log.d(
+                                TAG,
+                                "Stored ${profileEntities.size} member profiles to database for conversation ${conversation.id}"
+                            )
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Failed to extract metadata from group ${conversation.id}", e)
@@ -114,12 +167,21 @@ class ConversationRepository @Inject constructor(
                     // Always get the latest group name/description/imageUrl from XMTP
                     // These might have been updated by other members
                     val group = conversation.group
-                    @Suppress("DEPRECATION")
-                    val latestName = try { group.name?.takeIf { it.isNotBlank() } } catch (e: Exception) { null }
-                    @Suppress("DEPRECATION")
-                    val latestDescription = try { group.description } catch (e: Exception) { null }
-                    @Suppress("DEPRECATION")
-                    val latestImageUrl = try { group.imageUrl?.takeIf { it.isNotEmpty() } } catch (e: Exception) { null }
+                    val latestName = try {
+                        group.name().takeIf { it.isNotBlank() }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val latestDescription = try {
+                        group.description()
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val latestImageUrl = try {
+                        group.imageUrl().takeIf { it.isNotEmpty() }
+                    } catch (e: Exception) {
+                        null
+                    }
 
                     // Update entity with latest metadata
                     entity = entity.copy(
@@ -129,7 +191,12 @@ class ConversationRepository @Inject constructor(
                         expiresAt = expiresAt
                     )
 
-                    Log.d(TAG, "Group ${conversation.id} metadata: name='${entity.name}', description='${entity.description?.take(50)}', imageUrl='${entity.imageUrl}', expiresAt=$expiresAt")
+                    Log.d(
+                        TAG,
+                        "Group ${conversation.id} metadata: name='${entity.name}', description='${
+                            entity.description?.take(50)
+                        }', imageUrl='${entity.imageUrl}', expiresAt=$expiresAt"
+                    )
                 }
 
                 if (existing != null) {
@@ -141,21 +208,29 @@ class ConversationRepository @Inject constructor(
                         isUnread = existing.isUnread // Preserve unread state
                     )
                     conversationDao.insert(entity)
-                    Log.d(TAG, "Updated existing conversation: ${conversation.id}, consent=${existing.consent}, name='${entity.name}'")
+                    Log.d(
+                        TAG,
+                        "Updated existing conversation: ${conversation.id}, consent=${existing.consent}, name='${entity.name}'"
+                    )
                 } else {
                     // New conversation - check XMTP consent state
-                    val consentState = if (conversation is org.xmtp.android.library.Conversation.Dm) {
-                        // For DMs, check the XMTP consent state
-                        try {
-                            conversation.consentState()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to get consent state for DM ${conversation.id}", e)
-                            org.xmtp.android.library.ConsentState.UNKNOWN
+                    val consentState =
+                        if (conversation is org.xmtp.android.library.Conversation.Dm) {
+                            // For DMs, check the XMTP consent state
+                            try {
+                                conversation.consentState()
+                            } catch (e: Exception) {
+                                Log.w(
+                                    TAG,
+                                    "Failed to get consent state for DM ${conversation.id}",
+                                    e
+                                )
+                                org.xmtp.android.library.ConsentState.UNKNOWN
+                            }
+                        } else {
+                            // For groups, default to ALLOWED
+                            org.xmtp.android.library.ConsentState.ALLOWED
                         }
-                    } else {
-                        // For groups, default to ALLOWED
-                        org.xmtp.android.library.ConsentState.ALLOWED
-                    }
 
                     val consent = when (consentState) {
                         org.xmtp.android.library.ConsentState.ALLOWED -> "allowed"
@@ -165,7 +240,10 @@ class ConversationRepository @Inject constructor(
 
                     entity = entity.copy(consent = consent)
                     conversationDao.insert(entity)
-                    Log.d(TAG, "New conversation synced: ${conversation.id}, consent=$consent (XMTP consent: $consentState), name='${entity.name}'")
+                    Log.d(
+                        TAG,
+                        "New conversation synced: ${conversation.id}, consent=$consent (XMTP consent: $consentState), name='${entity.name}'"
+                    )
                 }
             }
 
@@ -198,15 +276,6 @@ class ConversationRepository @Inject constructor(
             Log.d(TAG, "Updated pinned state for conversation: $conversationId to $isPinned")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update pinned state", e)
-        }
-    }
-
-    suspend fun updateMuted(conversationId: String, isMuted: Boolean) {
-        try {
-            conversationDao.updateMuted(conversationId, isMuted)
-            Log.d(TAG, "Updated muted state for conversation: $conversationId to $isMuted")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to update muted state", e)
         }
     }
 
@@ -323,7 +392,10 @@ class ConversationRepository @Inject constructor(
 
                             // Extract metadata and store profiles
                             try {
-                                val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversation)
+                                val metadata =
+                                    com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(
+                                        conversation
+                                    )
                                 if (metadata != null) {
                                     // Extract expiresAt if present
                                     if (metadata.hasExpiresAtUnix() && metadata.expiresAtUnix > 0) {
@@ -331,7 +403,10 @@ class ConversationRepository @Inject constructor(
                                     }
 
                                     // Store member profiles to database
-                                    val profiles = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.extractProfiles(metadata)
+                                    val profiles =
+                                        com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.extractProfiles(
+                                            metadata
+                                        )
                                     val profileEntities = profiles.map { (inboxId, profile) ->
                                         MemberProfileEntity(
                                             conversationId = conversation.id,
@@ -341,19 +416,35 @@ class ConversationRepository @Inject constructor(
                                         )
                                     }
                                     memberProfileDao.insertAll(profileEntities)
-                                    Log.d(TAG, "Stored ${profileEntities.size} member profiles for new group ${conversation.id}")
+                                    Log.d(
+                                        TAG,
+                                        "Stored ${profileEntities.size} member profiles for new group ${conversation.id}"
+                                    )
                                 }
                             } catch (e: Exception) {
-                                Log.w(TAG, "Failed to extract metadata for new group ${conversation.id}", e)
+                                Log.w(
+                                    TAG,
+                                    "Failed to extract metadata for new group ${conversation.id}",
+                                    e
+                                )
                             }
 
                             // Get latest group metadata
-                            @Suppress("DEPRECATION")
-                            val latestName = try { group.name?.takeIf { it.isNotBlank() } } catch (e: Exception) { null }
-                            @Suppress("DEPRECATION")
-                            val latestDescription = try { group.description } catch (e: Exception) { null }
-                            @Suppress("DEPRECATION")
-                            val latestImageUrl = try { group.imageUrl?.takeIf { it.isNotEmpty() } } catch (e: Exception) { null }
+                            val latestName = try {
+                                group.name().takeIf { it.isNotBlank() }
+                            } catch (e: Exception) {
+                                null
+                            }
+                            val latestDescription = try {
+                                group.description()
+                            } catch (e: Exception) {
+                                null
+                            }
+                            val latestImageUrl = try {
+                                group.imageUrl().takeIf { it.isNotEmpty() }
+                            } catch (e: Exception) {
+                                null
+                            }
 
                             entity = entity.copy(
                                 name = latestName ?: entity.name,
@@ -362,7 +453,12 @@ class ConversationRepository @Inject constructor(
                                 expiresAt = expiresAt
                             )
 
-                            Log.d(TAG, "New group via stream - name='${entity.name}', description='${entity.description?.take(50)}', expiresAt=$expiresAt")
+                            Log.d(
+                                TAG,
+                                "New group via stream - name='${entity.name}', description='${
+                                    entity.description?.take(50)
+                                }', expiresAt=$expiresAt"
+                            )
 
                             // Check if this group matches a pending invite
                             val matched = inviteJoinRequestsManager.checkGroupForPendingInvite(
@@ -371,7 +467,10 @@ class ConversationRepository @Inject constructor(
                             )
 
                             if (matched) {
-                                Log.d(TAG, "Group ${conversation.id} matched a pending invite - setting consent to ALLOWED")
+                                Log.d(
+                                    TAG,
+                                    "Group ${conversation.id} matched a pending invite - setting consent to ALLOWED"
+                                )
                                 entity = entity.copy(consent = "allowed")
                                 conversationDao.insert(entity)
 
@@ -381,30 +480,48 @@ class ConversationRepository @Inject constructor(
                                 // Do a full sync to ensure all data is up to date
                                 syncConversations(inboxId)
                             } else {
-                                Log.d(TAG, "Group ${conversation.id} did NOT match any pending invite - consent set to DENIED")
+                                Log.d(
+                                    TAG,
+                                    "Group ${conversation.id} did NOT match any pending invite - consent set to DENIED"
+                                )
                                 entity = entity.copy(consent = "denied")
                                 conversationDao.insert(entity)
                             }
                         } else if (conversation is XMTPConversation.Dm) {
                             // For DMs, check if it's an invite-related DM
-                            val dm = conversation as XMTPConversation.Dm
-                            val consentState = try { dm.consentState() } catch (e: Exception) { org.xmtp.android.library.ConsentState.UNKNOWN }
+                            val dm = conversation
+                            val consentState = try {
+                                dm.consentState()
+                            } catch (e: Exception) {
+                                org.xmtp.android.library.ConsentState.UNKNOWN
+                            }
 
                             when (consentState) {
                                 org.xmtp.android.library.ConsentState.DENIED -> {
                                     // Already marked as hidden (invite-related), keep it hidden
                                     entity = entity.copy(consent = "denied")
-                                    Log.d(TAG, "DM ${conversation.id} is already marked as DENIED (invite-related), keeping hidden")
+                                    Log.d(
+                                        TAG,
+                                        "DM ${conversation.id} is already marked as DENIED (invite-related), keeping hidden"
+                                    )
                                 }
+
                                 org.xmtp.android.library.ConsentState.ALLOWED -> {
                                     // Already allowed, keep it visible
                                     entity = entity.copy(consent = "allowed")
-                                    Log.d(TAG, "DM ${conversation.id} is already ALLOWED, keeping visible")
+                                    Log.d(
+                                        TAG,
+                                        "DM ${conversation.id} is already ALLOWED, keeping visible"
+                                    )
                                 }
+
                                 else -> {
                                     // New DM with UNKNOWN consent - show by default
                                     entity = entity.copy(consent = "allowed")
-                                    Log.d(TAG, "New DM ${conversation.id} with UNKNOWN consent - showing by default")
+                                    Log.d(
+                                        TAG,
+                                        "New DM ${conversation.id} with UNKNOWN consent - showing by default"
+                                    )
                                 }
                             }
                             conversationDao.insert(entity)
@@ -416,6 +533,119 @@ class ConversationRepository @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start conversation streaming", e)
             }
+        }
+    }
+
+    /**
+     * Clean up the inbox associated with a conversation.
+     * Since we use one inbox per conversation, when a conversation is deleted,
+     * we should remove the inbox and client to avoid accumulating unused identities.
+     */
+    suspend fun cleanupInboxForConversation(conversationId: String) {
+        try {
+            // Get the conversation to find its inbox
+            val conversation = conversationDao.getConversationSync(conversationId)
+            if (conversation == null) {
+                Log.w(TAG, "cleanupInboxForConversation: Conversation not found: $conversationId")
+                return
+            }
+
+            val inboxId = conversation.inboxId
+            Log.d(
+                TAG,
+                "cleanupInboxForConversation: Cleaning up inbox $inboxId for conversation $conversationId"
+            )
+
+            // Check if this inbox has any other ALLOWED conversations
+            val otherConversations =
+                conversationDao.getAllowedConversations(inboxId).catch { emit(emptyList()) }.first()
+
+            if (otherConversations.isEmpty()) {
+                // No other allowed conversations, safe to delete the inbox
+                Log.d(
+                    TAG,
+                    "cleanupInboxForConversation: No other allowed conversations, deleting inbox $inboxId"
+                )
+
+                // Delete all conversations for this inbox
+                conversationDao.deleteAllForInbox(inboxId)
+
+                // Delete the inbox from database
+                val inbox = inboxDao.getInbox(inboxId)
+                if (inbox != null) {
+                    inboxDao.delete(inbox)
+                }
+
+                // Remove the client from memory
+                xmtpClientManager.removeClient(inboxId)
+
+                Log.d(TAG, "cleanupInboxForConversation: Successfully cleaned up inbox $inboxId")
+            } else {
+                Log.d(
+                    TAG,
+                    "cleanupInboxForConversation: Inbox $inboxId still has ${otherConversations.size} allowed conversations, not deleting"
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to cleanup inbox for conversation $conversationId", e)
+        }
+    }
+
+    /**
+     * Clean up inboxes that have expired conversations.
+     * Call this periodically to remove "zombie" inboxes.
+     */
+    suspend fun cleanupExpiredInboxes() {
+        try {
+            val allInboxes = inboxDao.getAllInboxesList()
+            val currentTime = System.currentTimeMillis()
+            // Grace period: Don't delete inboxes created in the last 30 seconds
+            // This prevents race conditions where we delete an inbox while a conversation is being created
+            val gracePeriodMillis = 30_000L
+
+            Log.d(
+                TAG,
+                "cleanupExpiredInboxes: Checking ${allInboxes.size} inboxes for expired conversations"
+            )
+
+            for (inbox in allInboxes) {
+                // Skip newly created inboxes (within grace period)
+                val inboxAge = currentTime - inbox.createdAt
+                if (inboxAge < gracePeriodMillis) {
+                    Log.d(
+                        TAG,
+                        "cleanupExpiredInboxes: Skipping inbox ${inbox.inboxId} (created ${inboxAge}ms ago, within ${gracePeriodMillis}ms grace period)"
+                    )
+                    continue
+                }
+
+                // Get all allowed conversations for this inbox (this filters out expired ones)
+                val allowedConversations =
+                    conversationDao.getAllowedConversations(inbox.inboxId, currentTime)
+                        .catch { emit(emptyList()) }
+                        .first()
+
+                if (allowedConversations.isEmpty()) {
+                    // This inbox has no allowed (non-expired) conversations
+                    Log.d(
+                        TAG,
+                        "cleanupExpiredInboxes: Inbox ${inbox.inboxId} has no allowed conversations, cleaning up"
+                    )
+
+                    // Delete all conversations for this inbox
+                    conversationDao.deleteAllForInbox(inbox.inboxId)
+
+                    // Delete the inbox
+                    inboxDao.delete(inbox)
+
+                    // Remove client from memory
+                    xmtpClientManager.removeClient(inbox.inboxId)
+
+                    Log.d(TAG, "cleanupExpiredInboxes: Cleaned up expired inbox ${inbox.inboxId}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to cleanup expired inboxes", e)
         }
     }
 }

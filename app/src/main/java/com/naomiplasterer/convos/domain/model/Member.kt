@@ -13,8 +13,6 @@ data class Member(
     val displayName: String
         get() = name ?: "Somebody"
 
-    val isAdmin: Boolean
-        get() = permissionLevel == PermissionLevel.ADMIN || permissionLevel == PermissionLevel.SUPER_ADMIN
 }
 
 enum class PermissionLevel {

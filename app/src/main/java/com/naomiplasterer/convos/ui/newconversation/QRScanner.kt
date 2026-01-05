@@ -33,6 +33,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.naomiplasterer.convos.ui.theme.Spacing
 import android.util.Log
+import androidx.annotation.OptIn
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,6 +42,7 @@ import java.util.concurrent.Executors
 
 private const val TAG = "QRScanner"
 
+@OptIn(ExperimentalGetImage::class)
 @Composable
 fun QRScanner(
     onQRCodeScanned: (String) -> Unit,
@@ -79,6 +81,7 @@ fun QRScanner(
                     modifier = Modifier.fillMaxSize()
                 )
             }
+
             else -> {
                 PermissionDeniedContent(
                     onRequestPermission = {
@@ -90,6 +93,7 @@ fun QRScanner(
     }
 }
 
+@ExperimentalGetImage
 @Composable
 private fun CameraPreviewWithScanner(
     onQRCodeScanned: (String) -> Unit,
@@ -160,15 +164,19 @@ private fun CameraPreviewWithScanner(
                                         scanAttempts++
 
                                         // Haptic feedback
-                                        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                            vibrator?.vibrate(android.os.VibrationEffect.createOneShot(100, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                        } else {
-                                            @Suppress("DEPRECATION")
-                                            vibrator?.vibrate(100)
-                                        }
+                                        val vibrator =
+                                            context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                                        vibrator?.vibrate(
+                                            android.os.VibrationEffect.createOneShot(
+                                                100,
+                                                android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                                            )
+                                        )
 
-                                        Log.d(TAG, "QR code successfully scanned (attempt #$scanAttempts), showing feedback")
+                                        Log.d(
+                                            TAG,
+                                            "QR code successfully scanned (attempt #$scanAttempts), showing feedback"
+                                        )
                                         // Add a small delay before calling the callback to ensure UI updates first
                                         kotlinx.coroutines.MainScope().launch {
                                             kotlinx.coroutines.delay(200)

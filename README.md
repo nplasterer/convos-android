@@ -145,7 +145,6 @@ This Android app maintains feature parity with the iOS version:
 
 ## Documentation
 
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) - Detailed implementation status
 - [iOS Convos](../convos-ios/) - Reference iOS implementation
 
 ## Support

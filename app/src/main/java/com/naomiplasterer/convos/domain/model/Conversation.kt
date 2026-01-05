@@ -33,3 +33,51 @@ enum class ConversationKind {
     GROUP,
     DM
 }
+
+/**
+ * Check if two conversations are meaningfully equal (ignoring timestamps and preview).
+ * This is used to prevent unnecessary UI updates when only timestamps change.
+ */
+fun Conversation.meaningfullyEquals(other: Conversation?): Boolean {
+    if (other == null) return false
+
+    return id == other.id &&
+            inboxId == other.inboxId &&
+            clientId == other.clientId &&
+            topic == other.topic &&
+            creatorInboxId == other.creatorInboxId &&
+            inviteTag == other.inviteTag &&
+            consent == other.consent &&
+            kind == other.kind &&
+            name == other.name &&
+            description == other.description &&
+            imageUrl == other.imageUrl &&
+            isPinned == other.isPinned &&
+            isUnread == other.isUnread &&
+            isMuted == other.isMuted &&
+            isDraft == other.isDraft &&
+            expiresAt == other.expiresAt &&
+            members == other.members
+    // Intentionally excluded: createdAt, lastMessageAt, lastMessagePreview
+}
+
+/**
+ * Check if two lists of conversations are meaningfully equal.
+ * Used to prevent unnecessary UI updates in the conversations list.
+ */
+fun List<Conversation>.meaningfullyEquals(other: List<Conversation>?): Boolean {
+    if (other == null) return false
+    if (this.size != other.size) return false
+
+    // Create maps by ID for efficient lookup
+    val thisMap = this.associateBy { it.id }
+    val otherMap = other.associateBy { it.id }
+
+    // Check if all IDs match
+    if (thisMap.keys != otherMap.keys) return false
+
+    // Check if each conversation is meaningfully equal
+    return thisMap.all { (id, conversation) ->
+        conversation.meaningfullyEquals(otherMap[id])
+    }
+}

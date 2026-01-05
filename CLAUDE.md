@@ -302,7 +302,6 @@ Refer to `../convos-ios/` for iOS reference implementation.
 ## Additional Documentation
 
 - [README.md](README.md) - Project overview and setup
-- [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) - Detailed implementation status
 - [iOS Docs](../convos-ios/CLAUDE.md) - iOS reference implementation
 - [XMTP Android SDK](https://github.com/xmtp/xmtp-android) - Official SDK documentation
 

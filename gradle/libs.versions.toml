@@ -33,6 +33,7 @@ zxing = "3.5.3"
 
 securityCrypto = "1.1.0"
 tink = "1.18.0"
+bouncycastle = "1.73"
 
 protobuf = "4.29.4"
 protobufPlugin = "0.9.4"
@@ -83,6 +84,7 @@ guava = { group = "com.google.guava", name = "guava", version.ref = "guava" }
 
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
+bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk15to18", version.ref = "bouncycastle" }
 
 protobuf-javalite = { group = "com.google.protobuf", name = "protobuf-javalite", version.ref = "protobuf" }
 

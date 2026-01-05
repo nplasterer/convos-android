@@ -1,10 +1,9 @@
 package com.naomiplasterer.convos.data.xmtp
 
 import android.content.Context
+import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import org.xmtp.android.library.Client
 import org.xmtp.android.library.ClientOptions
 import org.xmtp.android.library.XMTPEnvironment
@@ -12,7 +11,6 @@ import org.xmtp.android.library.codecs.AttachmentCodec
 import org.xmtp.android.library.codecs.ReactionCodec
 import org.xmtp.android.library.codecs.ReplyCodec
 import org.xmtp.android.library.messages.PrivateKeyBuilder
-import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,7 +23,6 @@ class XMTPClientManager @Inject constructor(
 ) {
     private val _clients = mutableMapOf<String, Client>()
     private val _activeInboxId = MutableStateFlow<String?>(null)
-    val activeInboxId: StateFlow<String?> = _activeInboxId.asStateFlow()
 
     init {
         registerCodecs()
@@ -42,16 +39,43 @@ class XMTPClientManager @Inject constructor(
         return _clients[inboxId]
     }
 
-    fun getActiveClient(): Client? {
-        return _activeInboxId.value?.let { _clients[it] }
-    }
+    /**
+     * Get the raw secp256k1 private key data for an inbox.
+     * This matches iOS: identity.keys.privateKey.secp256K1.bytes
+     * Returns the 32-byte wallet private key used for cryptographic operations.
+     */
+    fun getPrivateKeyData(inboxId: String): ByteArray? {
+        return try {
+            val storedIdentity = keychainIdentityManager.loadIdentity(inboxId)
+            if (storedIdentity == null) {
+                Log.w(TAG, "No stored identity found for inbox: $inboxId")
+                return null
+            }
 
-    fun getAllClients(): Map<String, Client> {
-        return _clients.toMap()
+            // Parse the stored PrivateKey protobuf (same format as iOS)
+            val privateKey = org.xmtp.android.library.messages.PrivateKey.parseFrom(storedIdentity.privateKeyData)
+
+            // Extract the secp256k1 private key bytes (matching iOS: privateKey.secp256K1.bytes)
+            val privateKeyBytes = when {
+                privateKey.hasSecp256K1() -> {
+                    val bytes = privateKey.secp256K1.bytes.toByteArray()
+                    Log.d(TAG, "Retrieved secp256k1 private key for inbox $inboxId: ${bytes.size} bytes, first 4 bytes: ${bytes.take(4).joinToString(",") { "%02x".format(it) }}")
+                    bytes
+                }
+                else -> {
+                    Log.w(TAG, "Private key is not secp256k1 type for inbox: $inboxId")
+                    null
+                }
+            }
+
+            privateKeyBytes
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to get private key data for inbox: $inboxId", e)
+            null
+        }
     }
 
     suspend fun createClient(
-        address: String,
         inboxId: String? = null,
         environment: XMTPEnvironment = XMTPEnvironment.PRODUCTION
     ): Result<Client> {
@@ -116,15 +140,6 @@ class XMTPClientManager @Inject constructor(
         )
     }
 
-    fun setActiveInbox(inboxId: String) {
-        if (_clients.containsKey(inboxId)) {
-            _activeInboxId.value = inboxId
-            Log.d(TAG, "Set active inbox: $inboxId")
-        } else {
-            Log.w(TAG, "Attempted to set non-existent inbox as active: $inboxId")
-        }
-    }
-
     fun removeClient(inboxId: String) {
         _clients.remove(inboxId)
         if (_activeInboxId.value == inboxId) {
@@ -133,31 +148,9 @@ class XMTPClientManager @Inject constructor(
         Log.d(TAG, "Removed client for inbox: $inboxId")
     }
 
-    /**
-     * Get the raw secp256k1 private key bytes for the given inbox ID.
-     * This is needed for generating encrypted invite tokens.
-     */
-    fun getPrivateKeyBytes(inboxId: String): ByteArray? {
-        return try {
-            val storedIdentity = keychainIdentityManager.loadIdentity(inboxId) ?: return null
-            val privateKey = org.xmtp.android.library.messages.PrivateKey.parseFrom(storedIdentity.privateKeyData)
-
-            // Extract the secp256k1 private key bytes
-            // The PrivateKey protobuf contains a secp256k1.uncompressed field with the 32-byte scalar
-            privateKey.secp256K1?.bytes?.toByteArray()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to extract private key bytes for inbox: $inboxId", e)
-            null
-        }
-    }
-
     fun clearAll() {
         _clients.clear()
         _activeInboxId.value = null
         Log.d(TAG, "Cleared all XMTP clients")
     }
-
-    fun hasActiveClient(): Boolean = _activeInboxId.value != null && _clients.isNotEmpty()
-
-    fun getAllInboxIds(): List<String> = _clients.keys.toList()
 }

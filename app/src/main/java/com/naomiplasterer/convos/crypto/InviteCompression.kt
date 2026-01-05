@@ -109,7 +109,10 @@ object InviteCompression {
             inflater.end()
 
             if (decompressedSize != originalSize) {
-                Log.e(TAG, "Decompressed size mismatch: expected $originalSize, got $decompressedSize")
+                Log.e(
+                    TAG,
+                    "Decompressed size mismatch: expected $originalSize, got $decompressedSize"
+                )
                 return null
             }
 

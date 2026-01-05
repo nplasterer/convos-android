@@ -1,35 +1,25 @@
 package com.naomiplasterer.convos.ui.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import coil.compose.AsyncImage
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.naomiplasterer.convos.BuildConfig
 import com.naomiplasterer.convos.ui.theme.Spacing
-import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
-    onBackClick: () -> Unit = {},
-    onMyInfoClick: () -> Unit = {}
+    onBackClick: () -> Unit = {}
 ) {
     var showDeleteConfirmation by remember { mutableStateOf(false) }
-    val quicknameDisplayName by viewModel.quicknameDisplayName.collectAsState()
-    val quicknameImagePath by viewModel.quicknameImagePath.collectAsState()
 
     Scaffold(
         topBar = {
@@ -48,41 +38,6 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            SettingsSection(title = "") {
-                SettingsItem(
-                    title = "My info",
-                    subtitle = quicknameDisplayName.ifEmpty { "Somebody" },
-                    onClick = onMyInfoClick,
-                    trailingContent = {
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (quicknameImagePath != null && File(quicknameImagePath!!).exists()) {
-                                AsyncImage(
-                                    model = File(quicknameImagePath!!),
-                                    contentDescription = "Profile image",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.Person,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(8.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                )
-            }
-
-            HorizontalDivider()
-
             SettingsSection(title = "About") {
                 SettingsItem(
                     title = "Secured by XMTP",

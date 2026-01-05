@@ -68,7 +68,7 @@ fun Conversation.toEntity(): ConversationEntity {
 
 suspend fun org.xmtp.android.library.Conversation.toEntity(inboxId: String): ConversationEntity {
     val isGroup = this is org.xmtp.android.library.Conversation.Group
-    val group = if (isGroup) (this as org.xmtp.android.library.Conversation.Group).group else null
+    val group = if (isGroup) this.group else null
     val dm = if (!isGroup) (this as org.xmtp.android.library.Conversation.Dm).dm else null
 
     val creatorId = try {
@@ -81,24 +81,20 @@ suspend fun org.xmtp.android.library.Conversation.toEntity(inboxId: String): Con
         ""
     }
 
-    // Access group metadata properties (using deprecated properties is fine here)
-    @Suppress("DEPRECATION")
     val groupName = try {
-        group?.name?.takeIf { it.isNotBlank() }
+        group?.name()?.takeIf { it.isNotBlank() }
     } catch (e: Exception) {
         null
     }
 
-    @Suppress("DEPRECATION")
     val groupDescription = try {
-        group?.description
+        group?.description()
     } catch (e: Exception) {
         null
     }
 
-    @Suppress("DEPRECATION")
     val groupImageUrl = try {
-        group?.imageUrl?.takeIf { it.isNotEmpty() }
+        group?.imageUrl()?.takeIf { it.isNotEmpty() }
     } catch (e: Exception) {
         null
     }
@@ -107,7 +103,10 @@ suspend fun org.xmtp.android.library.Conversation.toEntity(inboxId: String): Con
     val inviteTag = if (group != null) {
         try {
             val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
-            val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+            val metadata =
+                com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(
+                    conversationGroup
+                )
             metadata?.tag
         } catch (e: Exception) {
             null

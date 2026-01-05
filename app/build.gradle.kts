@@ -101,7 +101,9 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
 
-    implementation(libs.xmtp.android)
+    implementation(libs.xmtp.android) {
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15on")
+    }
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)
 
@@ -118,6 +120,7 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
     implementation(libs.tink.android)
+    implementation(libs.bouncycastle.bcprov)
 
     implementation(libs.protobuf.javalite)
 

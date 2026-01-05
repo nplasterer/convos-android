@@ -3,11 +3,8 @@ package com.naomiplasterer.convos.data.repository
 import com.naomiplasterer.convos.data.local.dao.MessageDao
 import com.naomiplasterer.convos.data.local.dao.MemberProfileDao
 import com.naomiplasterer.convos.data.mapper.toDomain
-import com.naomiplasterer.convos.data.mapper.toEntity
 import com.naomiplasterer.convos.data.xmtp.XMTPClientManager
 import com.naomiplasterer.convos.domain.model.Message
-import com.naomiplasterer.convos.domain.model.MessageContent
-import com.naomiplasterer.convos.domain.model.MessageStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -69,7 +66,10 @@ class MessageRepository @Inject constructor(
                     "text"
                 }
 
-                Log.d(TAG, "  Message ${decodedMessage.id}: contentType=$contentType, from ${decodedMessage.senderInboxId}")
+                Log.d(
+                    TAG,
+                    "  Message ${decodedMessage.id}: contentType=$contentType, from ${decodedMessage.senderInboxId}"
+                )
 
                 // Skip unsupported system messages that we don't need to show
                 val skipTypes = listOf(
@@ -85,7 +85,7 @@ class MessageRepository @Inject constructor(
                 // Handle membership changes and group updates specially
                 val (finalContentType, messageContent) = when {
                     contentType.contains("membership_change", ignoreCase = true) ||
-                    contentType.contains("memberChange", ignoreCase = true) -> {
+                            contentType.contains("memberChange", ignoreCase = true) -> {
                         // Format membership change as user-friendly message
                         val content = try {
                             val rawContent = decodedMessage.content<String>() ?: ""
@@ -96,18 +96,22 @@ class MessageRepository @Inject constructor(
                         }
                         "update" to content
                     }
+
                     contentType.contains("group_updated", ignoreCase = true) ||
-                    contentType.contains("groupUpdated", ignoreCase = true) -> {
+                            contentType.contains("groupUpdated", ignoreCase = true) -> {
                         // Format group update as user-friendly message
                         val content = try {
-                            val rawContent = decodedMessage.content<String>() ?: ""
-                            formatGroupUpdate(rawContent)
+                            // Get raw bytes instead of String to avoid UTF-8 corruption
+                            val rawBytes = decodedMessage.content<ByteArray>() ?: byteArrayOf()
+                            processGroupUpdateProfiles(conversationId, rawBytes)
+                            formatGroupUpdate(String(rawBytes, Charsets.UTF_8))
                         } catch (e: Exception) {
                             Log.w(TAG, "  Failed to decode group update: ${e.message}")
                             "Group settings were updated"
                         }
                         "update" to content
                     }
+
                     else -> {
                         // Regular text message
                         val content = try {
@@ -116,7 +120,10 @@ class MessageRepository @Inject constructor(
                             // Check if this looks like an invite code (base64url encoded protobuf)
                             // Invite codes typically start with specific patterns and are base64url
                             if (isLikelyInviteCode(rawContent)) {
-                                Log.d(TAG, "  Detected invite code message, hiding from conversation")
+                                Log.d(
+                                    TAG,
+                                    "  Detected invite code message, hiding from conversation"
+                                )
                                 return@mapNotNull null // Skip invite code messages
                             }
 
@@ -149,7 +156,10 @@ class MessageRepository @Inject constructor(
                 val latestMessageTime = entities.maxOfOrNull { it.sentAt }
                 if (latestMessageTime != null) {
                     conversationDao.updateLastMessageTime(conversationId, latestMessageTime)
-                    Log.d(TAG, "Updated lastMessageAt for conversation $conversationId to $latestMessageTime")
+                    Log.d(
+                        TAG,
+                        "Updated lastMessageAt for conversation $conversationId to $latestMessageTime"
+                    )
                 }
             }
 
@@ -225,9 +235,10 @@ class MessageRepository @Inject constructor(
                             "text"
                         }
 
-                        Log.d(TAG, "Received message via stream: ${decodedMessage.id}")
-                        Log.d(TAG, "  - Content Type: $contentType")
-                        Log.d(TAG, "  - Sender: ${decodedMessage.senderInboxId}")
+                        Log.d(TAG, "📨 Received message via stream: ${decodedMessage.id}")
+                        Log.d(TAG, "   Content Type: $contentType")
+                        Log.d(TAG, "   Full Type: ${decodedMessage.encodedContent.type}")
+                        Log.d(TAG, "   Sender: ${decodedMessage.senderInboxId}")
 
                         // Skip unsupported system messages
                         val skipTypes = listOf(
@@ -243,7 +254,7 @@ class MessageRepository @Inject constructor(
                         // Handle membership changes and group updates specially
                         val (finalContentType, messageContent) = when {
                             contentType.contains("membership_change", ignoreCase = true) ||
-                            contentType.contains("memberChange", ignoreCase = true) -> {
+                                    contentType.contains("memberChange", ignoreCase = true) -> {
                                 // Format membership change as user-friendly message
                                 val content = try {
                                     val rawContent = decodedMessage.content<String>() ?: ""
@@ -254,32 +265,47 @@ class MessageRepository @Inject constructor(
                                 }
                                 "update" to content
                             }
+
                             contentType.contains("group_updated", ignoreCase = true) ||
-                            contentType.contains("groupUpdated", ignoreCase = true) -> {
+                                    contentType.contains("groupUpdated", ignoreCase = true) -> {
+                                Log.d(TAG, "🔄 DETECTED GROUP_UPDATED MESSAGE!")
                                 // Format group update as user-friendly message
                                 val content = try {
-                                    val rawContent = decodedMessage.content<String>() ?: ""
-                                    formatGroupUpdate(rawContent)
+                                    // Get the raw encoded content bytes
+                                    val rawBytes =
+                                        decodedMessage.encodedContent.content.toByteArray()
+                                    Log.d(TAG, "   Processing group update profiles...")
+                                    processGroupUpdateProfiles(conversationId, rawBytes)
+                                    formatGroupUpdate(String(rawBytes, Charsets.UTF_8))
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "  Failed to decode group update: ${e.message}")
+                                    Log.w(TAG, "  Failed to decode group update: ${e.message}", e)
                                     "Group settings were updated"
                                 }
                                 "update" to content
                             }
+
                             else -> {
                                 // Regular text message
                                 val content = try {
-                                    val rawContent = decodedMessage.content<String>() ?: "[Empty message]"
+                                    val rawContent =
+                                        decodedMessage.content<String>() ?: "[Empty message]"
 
                                     // Check if this looks like an invite code (base64url encoded protobuf)
                                     if (isLikelyInviteCode(rawContent)) {
-                                        Log.d(TAG, "  Detected invite code message in stream, hiding from conversation")
+                                        Log.d(
+                                            TAG,
+                                            "  Detected invite code message in stream, hiding from conversation"
+                                        )
                                         return@collect // Skip invite code messages
                                     }
 
                                     rawContent
                                 } catch (e: Exception) {
-                                    Log.w(TAG, "  Failed to decode message content: ${e.message}", e)
+                                    Log.w(
+                                        TAG,
+                                        "  Failed to decode message content: ${e.message}",
+                                        e
+                                    )
                                     "[Unable to decode message]"
                                 }
                                 "text" to content
@@ -305,11 +331,219 @@ class MessageRepository @Inject constructor(
 
                         // Update conversation's lastMessageAt
                         conversationDao.updateLastMessageTime(conversationId, entity.sentAt)
-                        Log.d(TAG, "Updated lastMessageAt for conversation $conversationId to ${entity.sentAt}")
+                        Log.d(
+                            TAG,
+                            "Updated lastMessageAt for conversation $conversationId to ${entity.sentAt}"
+                        )
                     }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start message streaming", e)
             }
+        }
+    }
+
+    /**
+     * Processes group update messages to extract and save member profile updates and group metadata.
+     * iOS sends updates via group_updated messages with app_data containing ConversationCustomMetadata protobuf.
+     * Also checks for group name/description/image updates from the raw XMTP group object.
+     */
+    private suspend fun processGroupUpdateProfiles(conversationId: String, rawBytes: ByteArray) {
+        try {
+            Log.d(TAG, "Processing group update for profiles. Raw bytes length: ${rawBytes.size}")
+
+            // Find "app_data" bytes in the content
+            // Note: iOS sends BOTH old and new profile data, so we need the LAST occurrence
+            val appDataBytes = "app_data".toByteArray(Charsets.UTF_8)
+            val appDataIndex = rawBytes.lastIndexOfSubArray(appDataBytes)
+
+            val encodedData = if (appDataIndex >= 0) {
+                Log.d(TAG, "Found 'app_data' at byte index: $appDataIndex")
+
+                // Skip past "app_data" (8 bytes)
+                var startIndex = appDataIndex + 8
+
+                // Skip the protobuf field header (usually 1-2 bytes for field number + type)
+                // In protobuf: field 2, type length-delimited (wire type 2) = 0x12
+                // Then the length byte(s) - protobuf uses varint encoding
+                if (startIndex < rawBytes.size && rawBytes[startIndex] == 0x12.toByte()) {
+                    startIndex++ // Skip field header
+
+                    // Decode varint length
+                    var length = 0
+                    var shift = 0
+                    var lengthBytes = 0
+
+                    while (startIndex < rawBytes.size && lengthBytes < 5) { // Max 5 bytes for 32-bit varint
+                        val byte = rawBytes[startIndex].toInt() and 0xFF
+                        length = length or ((byte and 0x7F) shl shift)
+                        lengthBytes++
+                        startIndex++
+
+                        if ((byte and 0x80) == 0) {
+                            // High bit not set, this is the last byte
+                            break
+                        }
+                        shift += 7
+                    }
+
+                    Log.d(
+                        TAG,
+                        "Protobuf field length: $length (decoded from $lengthBytes varint bytes), data starting at byte: $startIndex"
+                    )
+
+                    // Extract the base64url data (length bytes)
+                    if (startIndex + length <= rawBytes.size) {
+                        val dataBytes = rawBytes.copyOfRange(startIndex, startIndex + length)
+                        // Convert bytes to ASCII string (base64url is ASCII-safe)
+                        String(dataBytes, Charsets.UTF_8)
+                    } else {
+                        Log.w(TAG, "Not enough bytes for declared length: $length")
+                        null
+                    }
+                } else {
+                    Log.w(
+                        TAG,
+                        "Unexpected byte after app_data: ${
+                            if (startIndex < rawBytes.size) "0x${
+                                rawBytes[startIndex].toString(16)
+                            }" else "EOF"
+                        }"
+                    )
+                    null
+                }
+            } else {
+                null
+            }
+
+            if (encodedData != null) {
+                Log.d(TAG, "✅ Found app_data in group update!")
+                Log.d(TAG, "   Encoded data length: ${encodedData.length}")
+                Log.d(TAG, "   Encoded data (first 100 chars): ${encodedData.take(100)}")
+                Log.d(TAG, "   Full encoded data: $encodedData")
+
+                try {
+                    Log.d(TAG, "📦 Attempting to decode protobuf metadata...")
+                    val metadata =
+                        com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.decodeMetadata(
+                            encodedData
+                        )
+
+                    if (metadata == null) {
+                        Log.e(TAG, "❌ Metadata decoded to null!")
+                        return
+                    }
+
+                    Log.d(TAG, "✅ Successfully decoded metadata!")
+                    Log.d(TAG, "   Tag: ${metadata.tag}")
+                    Log.d(TAG, "   Profiles count: ${metadata.profilesCount}")
+
+                    if (metadata.profilesCount == 0) {
+                        Log.w(TAG, "⚠️  No profiles in metadata")
+                        return
+                    }
+
+                    for ((index, profile) in metadata.profilesList.withIndex()) {
+                        val inboxIdHex = profile.inboxId.toByteArray()
+                            .joinToString("") { String.format("%02x", it) }
+                        val name = if (profile.hasName()) profile.name else null
+                        val image = if (profile.hasImage()) profile.image else null
+
+                        Log.d(TAG, "👤 Profile #${index + 1}:")
+                        Log.d(TAG, "   InboxId (hex): $inboxIdHex")
+                        Log.d(TAG, "   Name: $name")
+                        Log.d(TAG, "   Image: $image")
+
+                        val profileEntity =
+                            com.naomiplasterer.convos.data.local.entity.MemberProfileEntity(
+                                conversationId = conversationId,
+                                inboxId = inboxIdHex,
+                                name = name,
+                                avatar = image
+                            )
+
+                        Log.d(TAG, "💾 Inserting profile into database...")
+                        memberProfileDao.insert(profileEntity)
+                        Log.d(TAG, "✅ Profile saved to database")
+
+                        // Verify it was saved
+                        val savedProfile = memberProfileDao.getProfile(conversationId, inboxIdHex)
+                        if (savedProfile != null) {
+                            Log.d(TAG, "✅ Verified profile in database: name=${savedProfile.name}")
+                        } else {
+                            Log.e(TAG, "❌ Profile NOT found in database after insert!")
+                        }
+                    }
+
+                    Log.d(
+                        TAG,
+                        "🎉 Successfully processed ${metadata.profilesCount} profiles from group update"
+                    )
+                } catch (e: Exception) {
+                    Log.w(
+                        TAG,
+                        "Failed to decode or save profiles from app_data: ${encodedData.take(50)}...",
+                        e
+                    )
+                }
+            } else {
+                Log.d(TAG, "No app_data found in group update message")
+                // Log the raw bytes as hex to see what we're actually dealing with
+                val hexPreview = rawBytes.take(100).joinToString("") {
+                    String.format("%02X ", it)
+                }
+                Log.d(TAG, "Raw bytes hex preview: $hexPreview")
+            }
+
+            // Also check for group metadata changes (name, description, image) from XMTP group object
+            try {
+                val conversation = conversationDao.getConversationSync(conversationId)
+                if (conversation != null) {
+                    val client = xmtpClientManager.getClient(conversation.inboxId)
+                    if (client != null) {
+                        val group = client.conversations.findGroup(conversationId)
+                        if (group != null) {
+                            val groupName = try {
+                                group.name().takeIf { it.isNotBlank() }
+                            } catch (e: Exception) {
+                                null
+                            }
+
+                            val groupDescription = try {
+                                group.description()
+                            } catch (e: Exception) {
+                                null
+                            }
+
+                            val groupImageUrl = try {
+                                group.imageUrl().takeIf { it.isNotEmpty() }
+                            } catch (e: Exception) {
+                                null
+                            }
+
+                            // Only update if there are actual changes
+                            if (groupName != conversation.name ||
+                                groupDescription != conversation.description ||
+                                groupImageUrl != conversation.imageUrl
+                            ) {
+                                Log.d(
+                                    TAG,
+                                    "Updating conversation metadata - name: $groupName, description: $groupDescription, imageUrl: $groupImageUrl"
+                                )
+                                conversationDao.updateMetadata(
+                                    conversationId,
+                                    groupName,
+                                    groupDescription,
+                                    groupImageUrl
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update group metadata", e)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error processing group update profiles", e)
         }
     }
 
@@ -322,22 +556,38 @@ class MessageRepository @Inject constructor(
             // Check if this is iOS app_data format
             if (rawContent.contains("app_data:", ignoreCase = true)) {
                 // Extract the base64url encoded data after "app_data: "
-                val appDataRegex = """app_data:\s*([A-Za-z0-9_-]+)""".toRegex(RegexOption.IGNORE_CASE)
+                val appDataRegex =
+                    """app_data:\s*([A-Za-z0-9_-]+)""".toRegex(RegexOption.IGNORE_CASE)
                 val match = appDataRegex.find(rawContent)
                 val encodedData = match?.groupValues?.getOrNull(1)
 
                 if (encodedData != null) {
                     try {
                         // Decode the metadata
-                        val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.decodeMetadata(encodedData)
+                        val metadata =
+                            com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.decodeMetadata(
+                                encodedData
+                            )
                         if (metadata != null) {
                             // We have the metadata, but iOS stores name/description at the group level, not in metadata
                             // The app_data update means the group properties changed
                             // Check what changed by looking at the raw content
                             return when {
-                                rawContent.contains("name", ignoreCase = true) -> "Group name was updated"
-                                rawContent.contains("description", ignoreCase = true) -> "Group description was updated"
-                                rawContent.contains("image", ignoreCase = true) -> "Group photo was updated"
+                                rawContent.contains(
+                                    "name",
+                                    ignoreCase = true
+                                ) -> "Group name was updated"
+
+                                rawContent.contains(
+                                    "description",
+                                    ignoreCase = true
+                                ) -> "Group description was updated"
+
+                                rawContent.contains(
+                                    "image",
+                                    ignoreCase = true
+                                ) -> "Group photo was updated"
+
                                 else -> "Group settings were updated"
                             }
                         }
@@ -349,7 +599,11 @@ class MessageRepository @Inject constructor(
                 // If we couldn't decode, try to infer from the message
                 return when {
                     rawContent.contains("name", ignoreCase = true) -> "Group name was updated"
-                    rawContent.contains("description", ignoreCase = true) -> "Group description was updated"
+                    rawContent.contains(
+                        "description",
+                        ignoreCase = true
+                    ) -> "Group description was updated"
+
                     rawContent.contains("image", ignoreCase = true) -> "Group photo was updated"
                     else -> "Group settings were updated"
                 }
@@ -359,13 +613,18 @@ class MessageRepository @Inject constructor(
             when {
                 // Check for group name update
                 rawContent.contains("group_name", ignoreCase = true) ||
-                rawContent.contains("name", ignoreCase = true) -> {
+                        rawContent.contains("name", ignoreCase = true) -> {
                     // Try to extract the new name from the content
-                    val nameRegex = """(?:name[:\s=]+["']?)([^"',\}]+)""".toRegex(RegexOption.IGNORE_CASE)
+                    val nameRegex =
+                        """(?:name[:\s=]+["']?)([^"',\}]+)""".toRegex(RegexOption.IGNORE_CASE)
                     val match = nameRegex.find(rawContent)
                     val newName = match?.groupValues?.getOrNull(1)?.trim()
 
-                    if (!newName.isNullOrEmpty() && !newName.contains("app_data", ignoreCase = true)) {
+                    if (!newName.isNullOrEmpty() && !newName.contains(
+                            "app_data",
+                            ignoreCase = true
+                        )
+                    ) {
                         "Group name was changed to \"$newName\""
                     } else {
                         "Group name was changed"
@@ -374,8 +633,8 @@ class MessageRepository @Inject constructor(
 
                 // Check for group image/photo update
                 rawContent.contains("group_image", ignoreCase = true) ||
-                rawContent.contains("image", ignoreCase = true) ||
-                rawContent.contains("photo", ignoreCase = true) -> {
+                        rawContent.contains("image", ignoreCase = true) ||
+                        rawContent.contains("photo", ignoreCase = true) -> {
                     "Group photo was changed"
                 }
 
@@ -410,12 +669,14 @@ class MessageRepository @Inject constructor(
 
         return when {
             // Contains * separators (iOS format)
-            trimmed.contains("*") && trimmed.replace("*", "").matches(Regex("^[A-Za-z0-9_-]+$")) -> true
+            trimmed.contains("*") && trimmed.replace("*", "")
+                .matches(Regex("^[A-Za-z0-9_-]+$")) -> true
 
             // Starts with common protobuf prefixes when base64 encoded
             trimmed.startsWith("Cn") || trimmed.startsWith("Cg") || trimmed.startsWith("Ch") -> {
                 // Additional check: should be mostly base64url chars
-                val base64Chars = trimmed.count { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
+                val base64Chars =
+                    trimmed.count { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
                 base64Chars.toFloat() / trimmed.length > 0.95f
             }
 
@@ -440,14 +701,14 @@ class MessageRepository @Inject constructor(
             when {
                 // Check for "Add" action with members
                 rawContent.contains("action: Add", ignoreCase = true) ||
-                rawContent.contains("action=Add", ignoreCase = true) -> {
+                        rawContent.contains("action=Add", ignoreCase = true) -> {
                     // Try to extract inbox IDs and get names from profiles
                     val inboxIdPattern = """InboxId\(([^)]+)\)""".toRegex(RegexOption.IGNORE_CASE)
                     val matches = inboxIdPattern.findAll(rawContent).toList()
 
                     if (matches.isNotEmpty()) {
                         // Extract names from profiles
-                        val memberNames = matches.mapNotNull { match ->
+                        val memberNames = matches.map { match ->
                             val inboxId = match.groupValues.getOrNull(1)?.trim()
                             if (inboxId != null) {
                                 // Get name from database profiles, fallback to "Somebody"
@@ -478,7 +739,7 @@ class MessageRepository @Inject constructor(
 
                 // Check for "Remove" action
                 rawContent.contains("action: Remove", ignoreCase = true) ||
-                rawContent.contains("action=Remove", ignoreCase = true) -> {
+                        rawContent.contains("action=Remove", ignoreCase = true) -> {
                     val memberCount = "InboxId".toRegex(RegexOption.IGNORE_CASE)
                         .findAll(rawContent).count()
 
@@ -504,5 +765,22 @@ class MessageRepository @Inject constructor(
             Log.e(TAG, "Error formatting membership change", e)
             "Membership was updated"
         }
+    }
+
+    /**
+     * Helper extension function to find the LAST occurrence of a byte subarray
+     */
+    private fun ByteArray.lastIndexOfSubArray(subArray: ByteArray): Int {
+        for (i in (this.size - subArray.size) downTo 0) {
+            var found = true
+            for (j in subArray.indices) {
+                if (this[i + j] != subArray[j]) {
+                    found = false
+                    break
+                }
+            }
+            if (found) return i
+        }
+        return -1
     }
 }

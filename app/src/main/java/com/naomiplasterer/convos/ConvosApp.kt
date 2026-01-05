@@ -34,6 +34,7 @@ private fun handleDeepLink(uri: Uri, navigate: (String) -> Unit) {
                 navigate("${Screen.NewConversation.route}?mode=manual&inviteCode=$inviteCode")
             }
         }
+
         uri.scheme == "https" && uri.host == "convos.app" && uri.pathSegments.firstOrNull() == "i" -> {
             val inviteCode = uri.pathSegments.getOrNull(1)
             if (inviteCode != null) {
@@ -41,6 +42,7 @@ private fun handleDeepLink(uri: Uri, navigate: (String) -> Unit) {
                 navigate("${Screen.NewConversation.route}?mode=manual&inviteCode=$inviteCode")
             }
         }
+
         else -> {
             Log.w(TAG, "Unknown deep link format: $uri")
         }

@@ -116,8 +116,10 @@ fun ConversationsListEmptyCTA(
 
             Row(
                 modifier = Modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW,
-                        "https://hq.convos.org/privacy-and-terms".toUri())
+                    val intent = Intent(
+                        Intent.ACTION_VIEW,
+                        "https://hq.convos.org/privacy-and-terms".toUri()
+                    )
                     context.startActivity(intent)
                 },
                 horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),

@@ -25,7 +25,7 @@ object DatabaseModule {
             ConvosDatabase::class.java,
             "convos_database"
         )
-            .fallbackToDestructiveMigration()
+            .fallbackToDestructiveMigration(false)
             .build()
     }
 
@@ -33,14 +33,13 @@ object DatabaseModule {
     fun provideInboxDao(database: ConvosDatabase): InboxDao = database.inboxDao()
 
     @Provides
-    fun provideConversationDao(database: ConvosDatabase): ConversationDao = database.conversationDao()
+    fun provideConversationDao(database: ConvosDatabase): ConversationDao =
+        database.conversationDao()
 
     @Provides
     fun provideMessageDao(database: ConvosDatabase): MessageDao = database.messageDao()
 
     @Provides
-    fun provideMemberDao(database: ConvosDatabase): MemberDao = database.memberDao()
-
-    @Provides
-    fun provideMemberProfileDao(database: ConvosDatabase): MemberProfileDao = database.memberProfileDao()
+    fun provideMemberProfileDao(database: ConvosDatabase): MemberProfileDao =
+        database.memberProfileDao()
 }

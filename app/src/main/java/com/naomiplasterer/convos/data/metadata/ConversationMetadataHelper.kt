@@ -52,18 +52,37 @@ object ConversationMetadataHelper {
      */
     fun decodeMetadata(encoded: String): ConversationMetadataProtos.ConversationCustomMetadata? {
         return try {
+            Log.d(TAG, "📦 Decoding metadata from base64url string...")
+            Log.d(TAG, "   Input length: ${encoded.length}")
+            Log.d(TAG, "   Input (first 50): ${encoded.take(50)}")
+
             val bytes = Base64URL.decode(encoded)
+            Log.d(TAG, "   Decoded byte array length: ${bytes.size}")
 
             // Check if compressed (first byte is compression marker)
-            val protobufBytes = if (bytes.isNotEmpty() && bytes[0] == InviteCompression.COMPRESSION_MARKER) {
-                InviteCompression.decompress(bytes) ?: bytes
-            } else {
-                bytes
-            }
+            val protobufBytes =
+                if (bytes.isNotEmpty() && bytes[0] == InviteCompression.COMPRESSION_MARKER) {
+                    Log.d(TAG, "   Data is compressed, decompressing...")
+                    InviteCompression.decompress(bytes) ?: bytes
+                } else {
+                    Log.d(TAG, "   Data is not compressed")
+                    bytes
+                }
 
-            ConversationMetadataProtos.ConversationCustomMetadata.parseFrom(protobufBytes)
+            Log.d(TAG, "   Parsing protobuf from ${protobufBytes.size} bytes...")
+            val metadata =
+                ConversationMetadataProtos.ConversationCustomMetadata.parseFrom(protobufBytes)
+
+            Log.d(TAG, "✅ Successfully decoded metadata!")
+            Log.d(TAG, "   Tag: ${metadata.tag}")
+            Log.d(TAG, "   Has expiresAtUnix: ${metadata.hasExpiresAtUnix()}")
+            Log.d(TAG, "   Profiles count: ${metadata.profilesCount}")
+
+            metadata
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to decode metadata", e)
+            Log.e(TAG, "❌ Failed to decode metadata from: ${encoded.take(50)}...", e)
+            Log.e(TAG, "   Error: ${e.message}")
+            e.printStackTrace()
             null
         }
     }
@@ -98,17 +117,22 @@ object ConversationMetadataHelper {
             // Try to get from description (base64url encoded)
             // TODO: Use group.appData() when available
             val description = group.group.description()
-            if (description.isNullOrEmpty()) {
+            if (description.isEmpty()) {
                 Log.d(TAG, "No metadata found in group ${group.id}")
                 return null
             }
 
-            // Check if it's base64url encoded metadata
-            val metadata = if (description.matches(Regex("^[A-Za-z0-9_-]+$"))) {
+            // Check format: hex (legacy) first, then base64url
+            val metadata = if (description.matches(Regex("^[0-9a-fA-F]+$"))) {
+                // Legacy hex format - parse as hex-encoded protobuf
+                parseLegacyHexMetadata(description)
+            } else if (description.matches(Regex("^[A-Za-z0-9_-]+$"))) {
+                // Base64url format - decode as base64url
                 decodeMetadata(description)
             } else {
-                // Might be legacy hex format
-                parseLegacyHexMetadata(description)
+                // Unknown format
+                Log.w(TAG, "Unknown metadata format in group description")
+                null
             }
 
             Log.d(TAG, "Retrieved metadata from group ${group.id}: tag=${metadata?.tag}")

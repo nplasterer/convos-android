@@ -1,13 +1,21 @@
 package com.naomiplasterer.convos.ui.conversation
 
-import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -15,14 +23,31 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.AttachFile
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,7 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.Message
@@ -41,26 +66,22 @@ import com.naomiplasterer.convos.ui.theme.ConvosTheme
 import com.naomiplasterer.convos.ui.theme.CornerRadius
 import com.naomiplasterer.convos.ui.theme.Spacing
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConversationScreen(
     viewModel: ConversationViewModel = hiltViewModel(),
-    onBackClick: () -> Unit = {},
-    onEditClick: () -> Unit = {}
+    onBackClick: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
-    val explodeState by viewModel.explodeState.collectAsState()
-    val isCreator by viewModel.isCreator.collectAsState()
 
     var showMenu by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var showLeaveDialog by remember { mutableStateOf(false) }
-    var showExplodeDialog by remember { mutableStateOf(false) }
 
     // Helper to check if conversation should show delete prompt (only 1 member)
     val shouldPromptDelete = remember(uiState) {
@@ -109,7 +130,10 @@ fun ConversationScreen(
                         },
                         navigationIcon = {
                             IconButton(onClick = handleBackPress) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back"
+                                )
                             }
                         },
                         actions = {
@@ -131,51 +155,7 @@ fun ConversationScreen(
                                             Icon(Icons.Default.Share, contentDescription = null)
                                         }
                                     )
-                                    DropdownMenuItem(
-                                        text = { Text("Edit Conversation") },
-                                        onClick = {
-                                            showMenu = false
-                                            onEditClick()
-                                        },
-                                        leadingIcon = {
-                                            Icon(Icons.Default.Edit, contentDescription = null)
-                                        }
-                                    )
-                                    // Show menu options based on member count and creator status
-                                    if (state.conversation.members.size > 1) {
-                                        // Show "Explode Now" for creators with 2+ members
-                                        if (isCreator) {
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Text("💥 Explode Now")
-                                                    }
-                                                },
-                                                onClick = {
-                                                    showMenu = false
-                                                    showExplodeDialog = true
-                                                },
-                                                colors = MenuDefaults.itemColors(
-                                                    textColor = MaterialTheme.colorScheme.error
-                                                )
-                                            )
-                                            HorizontalDivider()
-                                        }
-                                        // Always show "Leave" for multi-member groups
-                                        DropdownMenuItem(
-                                            text = { Text("Leave Conversation") },
-                                            onClick = {
-                                                showMenu = false
-                                                showLeaveDialog = true
-                                            },
-                                            colors = MenuDefaults.itemColors(
-                                                textColor = MaterialTheme.colorScheme.error
-                                            )
-                                        )
-                                    } else {
-                                        // For single-member/draft conversations
+                                    if (state.conversation.members.size <= 1) {
                                         DropdownMenuItem(
                                             text = { Text("Delete Conversation") },
                                             onClick = {
@@ -193,12 +173,16 @@ fun ConversationScreen(
                         }
                     )
                 }
+
                 else -> {
                     TopAppBar(
                         title = { Text("Conversation") },
                         navigationIcon = {
                             IconButton(onClick = handleBackPress) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back"
+                                )
                             }
                         }
                     )
@@ -217,6 +201,7 @@ fun ConversationScreen(
                     CircularProgressIndicator()
                 }
             }
+
             is ConversationUiState.Success -> {
                 ConversationContent(
                     conversation = state.conversation,
@@ -229,6 +214,7 @@ fun ConversationScreen(
                     modifier = Modifier.padding(paddingValues)
                 )
             }
+
             is ConversationUiState.Error -> {
                 Box(
                     modifier = Modifier
@@ -247,17 +233,16 @@ fun ConversationScreen(
     }
 
     if (showShareDialog) {
-        when (val state = uiState) {
+        when (uiState) {
             is ConversationUiState.Success -> {
                 val inviteCode by viewModel.inviteCode.collectAsState()
                 ConversationShareDialog(
                     inviteCode = inviteCode,
-                    conversationName = state.conversation.name,
-                    conversationImageUrl = state.conversation.imageUrl,
                     onDismiss = { showShareDialog = false },
                     onGenerateInvite = { viewModel.generateInviteCode() }
                 )
             }
+
             else -> {}
         }
     }
@@ -293,53 +278,6 @@ fun ConversationScreen(
             }
         )
     }
-
-    if (showLeaveDialog) {
-        AlertDialog(
-            onDismissRequest = { showLeaveDialog = false },
-            title = { Text("Leave Conversation?") },
-            text = {
-                Text("Are you sure you want to leave this conversation? This will delete your identity for this conversation and you won't be able to send or receive messages.")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.leaveConversation()
-                        showLeaveDialog = false
-                        onBackClick()
-                    },
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Leave")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showLeaveDialog = false
-                }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Explode confirmation dialog
-    ExplodeConfirmationDialog(
-        showDialog = showExplodeDialog,
-        explodeState = explodeState,
-        onConfirm = {
-            viewModel.explodeConversation()
-        },
-        onDismiss = {
-            showExplodeDialog = false
-            // Navigate back if exploded successfully
-            if (explodeState is ExplodeState.Exploded) {
-                onBackClick()
-            }
-        }
-    )
 }
 
 @Composable
@@ -380,16 +318,16 @@ private fun ConversationContent(
 
                 // Determine if this is the start of a message group (Android grouping logic)
                 val isGroupStart = previousMessage == null ||
-                    previousMessage.senderInboxId != message.senderInboxId ||
-                    (message.sentAt - previousMessage.sentAt) > 5 * 60 * 1000 // 5 minutes
+                        previousMessage.senderInboxId != message.senderInboxId ||
+                        (message.sentAt - previousMessage.sentAt) > 5 * 60 * 1000 // 5 minutes
 
                 val isGroupEnd = nextMessage == null ||
-                    nextMessage.senderInboxId != message.senderInboxId ||
-                    (nextMessage.sentAt - message.sentAt) > 5 * 60 * 1000 // 5 minutes
+                        nextMessage.senderInboxId != message.senderInboxId ||
+                        (nextMessage.sentAt - message.sentAt) > 5 * 60 * 1000 // 5 minutes
 
-                val senderName = conversation.members.find { it.inboxId == message.senderInboxId }?.let { member ->
-                    member.addresses.firstOrNull() ?: message.senderInboxId.take(8)
-                } ?: message.senderInboxId.take(8)
+                val senderName =
+                    conversation.members.find { it.inboxId == message.senderInboxId }?.displayName
+                        ?: "Somebody"
 
                 MessageBubble(
                     message = message,
@@ -534,6 +472,7 @@ private fun MessageBubble(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
                         }
+
                         MessageStatus.SENT, MessageStatus.DELIVERED -> {
                             Text(
                                 text = "✓",
@@ -541,6 +480,7 @@ private fun MessageBubble(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
                         }
+
                         MessageStatus.FAILED -> {
                             Text(
                                 text = "!",

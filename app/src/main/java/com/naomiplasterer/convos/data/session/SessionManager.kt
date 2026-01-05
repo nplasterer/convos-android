@@ -28,7 +28,6 @@ class SessionManager @Inject constructor(
     val sessionState: StateFlow<SessionState> = _sessionState.asStateFlow()
 
     private val _activeConversationId = MutableStateFlow<String?>(null)
-    val activeConversationId: StateFlow<String?> = _activeConversationId.asStateFlow()
 
     init {
         scope.launch {
@@ -81,7 +80,6 @@ class SessionManager @Inject constructor(
 
             Log.d(TAG, "Lazy loading client for inbox: $inboxId")
             val clientResult = xmtpClientManager.createClient(
-                address = inbox.address,
                 inboxId = inbox.inboxId
             )
 
@@ -108,7 +106,8 @@ class SessionManager @Inject constructor(
         _sessionState.value = SessionState.Creating
 
         return try {
-            val clientResult = xmtpClientManager.createClient(address, environment = environment)
+            // Pass null as inboxId to create a NEW client (not authorize existing)
+            val clientResult = xmtpClientManager.createClient(inboxId = null, environment = environment)
 
             clientResult.fold(
                 onSuccess = { client ->
@@ -141,56 +140,6 @@ class SessionManager @Inject constructor(
         }
     }
 
-    suspend fun switchSession(inboxId: String): Result<Unit> {
-        return try {
-            val inbox = inboxDao.getInbox(inboxId)
-            if (inbox == null) {
-                return Result.failure(IllegalArgumentException("Inbox not found: $inboxId"))
-            }
-
-            val client = xmtpClientManager.getClient(inboxId)
-            if (client == null) {
-                val recreateResult = xmtpClientManager.createClient(
-                    address = inbox.address,
-                    inboxId = inbox.inboxId
-                )
-                if (recreateResult.isFailure) {
-                    return Result.failure(recreateResult.exceptionOrNull()!!)
-                }
-            }
-
-            xmtpClientManager.setActiveInbox(inboxId)
-            _sessionState.value = SessionState.Active(
-                inboxId = inboxId,
-                address = inbox.address
-            )
-
-            Log.d(TAG, "Switched to session: $inboxId")
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to switch session", e)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun deleteSession(inboxId: String) {
-        try {
-            val inbox = inboxDao.getInbox(inboxId)
-            if (inbox != null) {
-                inboxDao.delete(inbox)
-                xmtpClientManager.removeClient(inboxId)
-
-                if ((_sessionState.value as? SessionState.Active)?.inboxId == inboxId) {
-                    _sessionState.value = SessionState.NoSession
-                }
-
-                Log.d(TAG, "Deleted session: $inboxId")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to delete session", e)
-        }
-    }
-
     suspend fun deleteAllSessions() {
         try {
             inboxDao.deleteAll()
@@ -210,10 +159,6 @@ class SessionManager @Inject constructor(
 
     fun getCurrentInboxId(): String? {
         return (_sessionState.value as? SessionState.Active)?.inboxId
-    }
-
-    fun isSessionActive(): Boolean {
-        return _sessionState.value is SessionState.Active
     }
 
     suspend fun getAllInboxIds(): List<String> {

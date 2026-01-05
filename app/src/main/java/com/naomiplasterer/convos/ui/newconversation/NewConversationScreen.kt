@@ -61,8 +61,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import com.naomiplasterer.convos.ui.onboarding.OnboardingView
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.naomiplasterer.convos.ui.theme.Spacing
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -142,12 +141,14 @@ fun NewConversationScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
                 NewConversationMode.SCAN -> {
                     QRScannerView(
                         onQRCodeScanned = viewModel::onQRCodeScanned,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
                 NewConversationMode.MANUAL -> {
                     ManualEntryView(
                         inviteCode = inviteCode,
@@ -155,40 +156,6 @@ fun NewConversationScreen(
                         onJoinClick = { viewModel.joinConversation() },
                         isLoading = uiState is NewConversationUiState.Joining,
                         modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-
-            // Show onboarding UI if needed
-            AnimatedVisibility(
-                visible = viewModel.onboardingCoordinator.showOnboardingView,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.BottomCenter),
-                enter = slideInVertically(
-                    initialOffsetY = { it },
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                ) + fadeIn(),
-                exit = slideOutVertically(
-                    targetOffsetY = { it }
-                ) + fadeOut()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
-                ) {
-                    OnboardingView(
-                        coordinator = viewModel.onboardingCoordinator,
-                        onUseQuickname = { profile, imageUri ->
-                            // TODO: Apply quickname to conversation
-                        },
-                        onPresentProfileSettings = {
-                            // TODO: Navigate to profile settings
-                        }
                     )
                 }
             }
@@ -201,14 +168,22 @@ fun NewConversationScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
                 is NewConversationUiState.WaitingForApproval -> {
                     WaitingForApprovalOverlay(
                         message = state.message,
                         conversationName = state.conversationName,
-                        conversationImageURL = state.conversationImageURL,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
+                is NewConversationUiState.Success -> {
+                    LoadingOverlay(
+                        message = "Opening conversation...",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
                 else -> {}
             }
 
@@ -286,7 +261,8 @@ private fun QRScannerView(
         // Paste button in bottom-right corner
         FloatingActionButton(
             onClick = {
-                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clipboard =
+                    context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 val clipData = clipboard.primaryClip
                 val text = clipData?.getItemAt(0)?.text?.toString()
                 if (text != null) {
@@ -376,7 +352,7 @@ private fun LoadingOverlay(
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+            color = MaterialTheme.colorScheme.surface,
             modifier = Modifier.fillMaxSize()
         ) {
             Column(
@@ -405,7 +381,6 @@ private fun LoadingOverlay(
 private fun WaitingForApprovalOverlay(
     message: String,
     conversationName: String?,
-    conversationImageURL: String?,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -413,7 +388,7 @@ private fun WaitingForApprovalOverlay(
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+            color = MaterialTheme.colorScheme.surface,
             modifier = Modifier.fillMaxSize()
         ) {
             Column(
@@ -421,25 +396,6 @@ private fun WaitingForApprovalOverlay(
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.padding(Spacing.step8x)
             ) {
-                // Show conversation image if available
-                if (conversationImageURL != null) {
-                    androidx.compose.foundation.layout.Box(
-                        modifier = Modifier
-                            .size(80.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        coil.compose.AsyncImage(
-                            model = conversationImageURL,
-                            contentDescription = "Conversation image",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(Spacing.step6x))
-                }
-
                 CircularProgressIndicator(
                     modifier = Modifier.size(48.dp),
                     color = MaterialTheme.colorScheme.primary
