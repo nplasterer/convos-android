@@ -12,7 +12,7 @@ private const val TAG = "ConversationMetadataHelper"
 
 /**
  * Helper class for handling conversation metadata storage in XMTP groups.
- * Matches iOS implementation using appData() instead of description().
+ * Uses appData() for metadata storage, with fallback to description() for backwards compatibility.
  */
 object ConversationMetadataHelper {
 
@@ -88,8 +88,7 @@ object ConversationMetadataHelper {
     }
 
     /**
-     * Store metadata in a group's description (temporary - until appData API is available)
-     * TODO: Switch to appData() when XMTP Android SDK supports it
+     * Store metadata in a group's appData
      */
     suspend fun storeMetadata(
         group: Conversation.Group,
@@ -97,10 +96,9 @@ object ConversationMetadataHelper {
     ): Result<Unit> {
         return try {
             val encoded = encodeMetadata(metadata)
-            // Store in description as base64url encoded string
-            // TODO: Use group.updateAppData(encoded) when available
-            group.group.updateDescription(encoded)
-            Log.d(TAG, "Stored metadata in group description (temporary): tag=${metadata.tag}")
+            // Store in appData as base64url encoded string
+            group.group.updateAppData(encoded)
+            Log.d(TAG, "Stored metadata in group appData: tag=${metadata.tag}")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to store metadata in group", e)
@@ -109,29 +107,36 @@ object ConversationMetadataHelper {
     }
 
     /**
-     * Retrieve metadata from a group's description (temporary - until appData API is available)
-     * TODO: Switch to appData() when XMTP Android SDK supports it
+     * Retrieve metadata from a group's appData
+     * Falls back to description field for backwards compatibility
      */
     suspend fun retrieveMetadata(group: Conversation.Group): ConversationMetadataProtos.ConversationCustomMetadata? {
         return try {
-            // Try to get from description (base64url encoded)
-            // TODO: Use group.appData() when available
-            val description = group.group.description()
-            if (description.isEmpty()) {
-                Log.d(TAG, "No metadata found in group ${group.id}")
-                return null
+            // Try to get from appData first (new way)
+            val appData = group.group.appData()
+            val dataSource = if (appData.isNotEmpty()) {
+                appData
+            } else {
+                // Fall back to description for backwards compatibility
+                val description = group.group.description()
+                if (description.isEmpty()) {
+                    Log.d(TAG, "No metadata found in group ${group.id}")
+                    return null
+                }
+                Log.d(TAG, "Using description field for backwards compatibility")
+                description
             }
 
             // Check format: hex (legacy) first, then base64url
-            val metadata = if (description.matches(Regex("^[0-9a-fA-F]+$"))) {
+            val metadata = if (dataSource.matches(Regex("^[0-9a-fA-F]+$"))) {
                 // Legacy hex format - parse as hex-encoded protobuf
-                parseLegacyHexMetadata(description)
-            } else if (description.matches(Regex("^[A-Za-z0-9_-]+$"))) {
+                parseLegacyHexMetadata(dataSource)
+            } else if (dataSource.matches(Regex("^[A-Za-z0-9_-]+$"))) {
                 // Base64url format - decode as base64url
-                decodeMetadata(description)
+                decodeMetadata(dataSource)
             } else {
                 // Unknown format
-                Log.w(TAG, "Unknown metadata format in group description")
+                Log.w(TAG, "Unknown metadata format in group")
                 null
             }
 
