@@ -72,6 +72,16 @@ class ConversationRepository @Inject constructor(
         }
     }
 
+    /**
+     * Observe the database for a conversation with the given invite tag.
+     * Returns a Flow that emits the conversation ID when it appears (matches iOS ValueObservation).
+     * This is event-driven - automatically emits when the conversation is added to the database.
+     */
+    fun observeConversationByTag(tag: String): Flow<String?> {
+        Log.d(TAG, "Starting reactive observation for conversation with tag: $tag")
+        return conversationDao.observeConversationByTag(tag)
+    }
+
     fun getConversationsFromAllInboxes(inboxIds: List<String>): Flow<List<Conversation>> {
         return conversationDao.getAllowedConversationsFromAllInboxes(inboxIds)
             .map { entities ->
@@ -201,8 +211,33 @@ class ConversationRepository @Inject constructor(
 
                 if (existing != null) {
                     // Conversation exists - update metadata but preserve consent and user preferences
+                    var finalConsent = existing.consent
+
+                    // NEVER downgrade consent from ALLOWED (it's permanent once set)
+                    if (existing.consent == "allowed") {
+                        Log.d(
+                            TAG,
+                            "Preserving consent=allowed for conversation ${conversation.id}"
+                        )
+                        finalConsent = "allowed"
+                    } else if (conversation is org.xmtp.android.library.Conversation.Group) {
+                        // Check if this conversation has pending invite and should be upgraded to ALLOWED
+                        // Use read-only check to avoid removing pending invite (stream needs it too)
+                        val hasPending = inviteJoinRequestsManager.hasPendingInvite(
+                            groupId = conversation.id,
+                            client = client
+                        )
+                        if (hasPending) {
+                            Log.d(
+                                TAG,
+                                "Existing conversation ${conversation.id} has pending invite - updating consent to ALLOWED"
+                            )
+                            finalConsent = "allowed"
+                        }
+                    }
+
                     entity = entity.copy(
-                        consent = existing.consent, // Preserve consent state
+                        consent = finalConsent, // Use updated consent if matched to pending invite
                         isPinned = existing.isPinned, // Preserve pinned state
                         isMuted = existing.isMuted, // Preserve muted state
                         isUnread = existing.isUnread // Preserve unread state
@@ -210,7 +245,7 @@ class ConversationRepository @Inject constructor(
                     conversationDao.insert(entity)
                     Log.d(
                         TAG,
-                        "Updated existing conversation: ${conversation.id}, consent=${existing.consent}, name='${entity.name}'"
+                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}'"
                     )
                 } else {
                     // New conversation - check XMTP consent state
@@ -232,10 +267,26 @@ class ConversationRepository @Inject constructor(
                             org.xmtp.android.library.ConsentState.ALLOWED
                         }
 
-                    val consent = when (consentState) {
+                    var consent = when (consentState) {
                         org.xmtp.android.library.ConsentState.ALLOWED -> "allowed"
                         org.xmtp.android.library.ConsentState.DENIED -> "denied"
                         org.xmtp.android.library.ConsentState.UNKNOWN -> "allowed" // Default to allowed for unknown
+                    }
+
+                    // Check if this new group matches a pending invite
+                    // Use read-only check to avoid removing pending invite (stream needs it too)
+                    if (conversation is org.xmtp.android.library.Conversation.Group) {
+                        val hasPending = inviteJoinRequestsManager.hasPendingInvite(
+                            groupId = conversation.id,
+                            client = client
+                        )
+                        if (hasPending) {
+                            Log.d(
+                                TAG,
+                                "New conversation ${conversation.id} has pending invite - setting consent to ALLOWED"
+                            )
+                            consent = "allowed"
+                        }
                     }
 
                     entity = entity.copy(consent = consent)
@@ -455,37 +506,48 @@ class ConversationRepository @Inject constructor(
 
                             Log.d(
                                 TAG,
-                                "New group via stream - name='${entity.name}', description='${
-                                    entity.description?.take(50)
-                                }', expiresAt=$expiresAt"
+                                "New group via stream - id=${conversation.id}, name='${entity.name}', inviteTag='${entity.inviteTag}', expiresAt=$expiresAt"
                             )
 
-                            // Check if this group matches a pending invite
-                            val matched = inviteJoinRequestsManager.checkGroupForPendingInvite(
-                                groupId = conversation.id,
-                                client = client
-                            )
+                            // Check if this conversation already exists in database
+                            val existingConsent = conversationDao.getConversationSync(conversation.id)?.consent
 
-                            if (matched) {
+                            // Never downgrade from ALLOWED to DENIED
+                            if (existingConsent == "allowed") {
                                 Log.d(
                                     TAG,
-                                    "Group ${conversation.id} matched a pending invite - setting consent to ALLOWED"
+                                    "Group ${conversation.id} already has consent=allowed, preserving it"
                                 )
                                 entity = entity.copy(consent = "allowed")
                                 conversationDao.insert(entity)
-
-                                // Ensure the consent is also updated in the database
-                                updateConsent(conversation.id, ConsentState.ALLOWED)
-
-                                // Do a full sync to ensure all data is up to date
-                                syncConversations(inboxId)
                             } else {
-                                Log.d(
-                                    TAG,
-                                    "Group ${conversation.id} did NOT match any pending invite - consent set to DENIED"
+                                // Check if this group matches a pending invite
+                                val matched = inviteJoinRequestsManager.checkGroupForPendingInvite(
+                                    groupId = conversation.id,
+                                    client = client
                                 )
-                                entity = entity.copy(consent = "denied")
-                                conversationDao.insert(entity)
+
+                                if (matched) {
+                                    Log.d(
+                                        TAG,
+                                        "Group ${conversation.id} matched a pending invite - setting consent to ALLOWED"
+                                    )
+                                    entity = entity.copy(consent = "allowed")
+                                    conversationDao.insert(entity)
+
+                                    // Ensure the consent is also updated in the database
+                                    updateConsent(conversation.id, ConsentState.ALLOWED)
+
+                                    // Do a full sync to ensure all data is up to date
+                                    syncConversations(inboxId)
+                                } else {
+                                    Log.d(
+                                        TAG,
+                                        "Group ${conversation.id} did NOT match any pending invite - consent set to DENIED"
+                                    )
+                                    entity = entity.copy(consent = "denied")
+                                    conversationDao.insert(entity)
+                                }
                             }
                         } else if (conversation is XMTPConversation.Dm) {
                             // For DMs, check if it's an invite-related DM
@@ -532,6 +594,45 @@ class ConversationRepository @Inject constructor(
                     }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start conversation streaming", e)
+            }
+        }
+    }
+
+    /**
+     * Start streaming all messages for an inbox to process join requests in real-time.
+     * This matches iOS's message streaming approach for instant join request processing.
+     */
+    fun startMessageStreaming(inboxId: String) {
+        scope.launch {
+            try {
+                val client = xmtpClientManager.getClient(inboxId)
+                if (client == null) {
+                    Log.e(TAG, "No client for inbox: $inboxId")
+                    return@launch
+                }
+
+                Log.d(TAG, "📨 Starting message streaming for inbox: $inboxId (real-time join request processing)")
+
+                client.conversations.streamAllMessages()
+                    .catch { e ->
+                        Log.e(TAG, "Error in message stream", e)
+                    }
+                    .collect { decodedMessage ->
+                        try {
+                            Log.d(TAG, "📬 Received message via stream, processing as potential join request")
+
+                            // Process all messages through join request manager
+                            // The manager will filter for DMs and validate join requests
+                            inviteJoinRequestsManager.processJoinRequests(
+                                client = client,
+                                sinceNs = decodedMessage.sentAtNs
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error processing streamed message", e)
+                        }
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start message streaming", e)
             }
         }
     }

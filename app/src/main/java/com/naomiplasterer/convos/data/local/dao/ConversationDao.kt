@@ -28,6 +28,9 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations WHERE inviteTag = :tag LIMIT 1")
     suspend fun findConversationByTag(tag: String): ConversationEntity?
 
+    @Query("SELECT id FROM conversations WHERE inviteTag = :tag AND isDraft = 0 LIMIT 1")
+    fun observeConversationByTag(tag: String): Flow<String?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(conversation: ConversationEntity)
 

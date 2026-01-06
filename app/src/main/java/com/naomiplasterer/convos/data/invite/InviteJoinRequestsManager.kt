@@ -53,6 +53,77 @@ class InviteJoinRequestsManager @Inject constructor(
     }
 
     /**
+     * Wait reactively for a conversation matching the pending invite tag to appear in the database.
+     * This matches iOS's ValueObservation approach - event-driven instead of polling.
+     *
+     * @param tag The invite tag to watch for
+     * @param conversationDao The DAO to observe
+     * @return Flow that emits the conversation ID when found (null until then)
+     */
+    fun waitForJoinedConversation(
+        tag: String,
+        conversationDao: com.naomiplasterer.convos.data.local.dao.ConversationDao
+    ): kotlinx.coroutines.flow.Flow<String?> {
+        Log.d(TAG, "Starting reactive observation for invite tag: $tag")
+        return conversationDao.observeConversationByTag(tag)
+    }
+
+    /**
+     * Check if a group tag matches any pending invite (read-only, doesn't mutate state).
+     * Used by syncConversations to check consent without side effects.
+     */
+    suspend fun hasPendingInvite(groupId: String, client: Client): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val group = client.conversations.listGroups().find { it.id == groupId }
+            if (group == null) {
+                Log.w(TAG, "Group $groupId not found for pending invite check")
+                return@withContext false
+            }
+
+            // Extract tag from group metadata
+            val groupTag = try {
+                val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
+                val metadata =
+                    com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(
+                        conversationGroup
+                    )
+                if (metadata != null && !metadata.tag.isBlank()) {
+                    metadata.tag
+                } else {
+                    // Fallback to legacy hex format
+                    val groupDescription = group.description()
+                    if (groupDescription.isNotEmpty()) {
+                        val legacyMetadata =
+                            com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.parseLegacyHexMetadata(
+                                groupDescription
+                            )
+                        if (legacyMetadata != null && !legacyMetadata.tag.isBlank()) {
+                            legacyMetadata.tag
+                        } else {
+                            return@withContext false
+                        }
+                    } else {
+                        return@withContext false
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to extract tag from group $groupId", e)
+                return@withContext false
+            }
+
+            // Check if tag matches any pending invite (read-only)
+            val hasMatch = pendingInvites.containsKey(groupTag)
+            if (hasMatch) {
+                Log.d(TAG, "✅ Group $groupId has pending invite with tag: $groupTag")
+            }
+            hasMatch
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking pending invite for group", e)
+            false
+        }
+    }
+
+    /**
      * Check if a new group matches any pending invites by comparing tags.
      * If it matches, update consent to ALLOWED and remove from pending.
      * If not, update consent to DENIED.
@@ -135,11 +206,15 @@ class InviteJoinRequestsManager @Inject constructor(
             }
 
             if (pendingInvites.containsKey(groupTag)) {
+                Log.d(TAG, "✅ Group $groupId matched pending invite with tag: $groupTag")
                 group.updateConsentState(ConsentState.ALLOWED)
                 pendingInvites.remove(groupTag)
+                Log.d(TAG, "📢 Emitting groupMatched for conversation: $groupId")
                 _groupMatched.emit(groupId)
                 true
             } else {
+                Log.d(TAG, "❌ Group $groupId tag '$groupTag' does not match any pending invite")
+                Log.d(TAG, "Pending invite tags: ${pendingInvites.keys.joinToString()}")
                 group.updateConsentState(ConsentState.DENIED)
                 false
             }

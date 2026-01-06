@@ -441,6 +441,11 @@ class NewConversationViewModel @Inject constructor(
                 inviteJoinRequestsManager.storePendingInvite(signedInvite)
                 Log.d(TAG, "💾 Stored pending invite with tag: ${payload.tag}")
 
+                // Start conversation streaming to detect when we're added to the group (matches iOS)
+                // The stream will call checkGroupForPendingInvite which emits groupMatched when tag matches
+                Log.d(TAG, "📡 Starting conversation streaming for real-time group detection")
+                conversationRepository.startConversationStreaming(newInboxId)
+
                 _uiState.value = NewConversationUiState.WaitingForApproval(
                     message = "Join request sent! Waiting for approval.",
                     conversationName = payload.name,

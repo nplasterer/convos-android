@@ -11,6 +11,7 @@ import com.naomiplasterer.convos.data.session.SessionManager
 import com.naomiplasterer.convos.data.xmtp.XMTPClientManager
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.Message
+import com.naomiplasterer.convos.domain.model.MessageContent
 import com.naomiplasterer.convos.domain.model.meaningfullyEquals
 import com.naomiplasterer.convos.proto.ConversationMetadataProtos
 import com.naomiplasterer.convos.codecs.ExplodeSettingsCodec
@@ -136,7 +137,26 @@ class ConversationViewModel @Inject constructor(
                     oldIds == newIds
                 }
                 .collectLatest { messages ->
-                    Log.d(TAG, "💬 Messages Flow emitted: ${messages.size} messages")
+                    Log.d(TAG, "")
+                    Log.d(TAG, "========================================")
+                    Log.d(TAG, "💬 MESSAGES FLOW EMITTED")
+                    Log.d(TAG, "========================================")
+                    Log.d(TAG, "   Total messages: ${messages.size}")
+                    messages.forEachIndexed { index, message ->
+                        val contentPreview = when (val content = message.content) {
+                            is MessageContent.Text -> content.text.take(50)
+                            is MessageContent.Emoji -> content.emoji
+                            is MessageContent.Attachment -> "Attachment: ${content.url}"
+                            is MessageContent.Update -> "${content.updateType}: ${content.details.take(50)}"
+                        }
+                        Log.d(TAG, "   Message #${index + 1}:")
+                        Log.d(TAG, "     ID: ${message.id}")
+                        Log.d(TAG, "     From: ${message.senderInboxId}")
+                        Log.d(TAG, "     Content type: ${message.content::class.simpleName}")
+                        Log.d(TAG, "     Content: $contentPreview")
+                    }
+                    Log.d(TAG, "========================================")
+                    Log.d(TAG, "")
                     updateUiStateWithMessages(messages)
                 }
         }
@@ -263,13 +283,33 @@ class ConversationViewModel @Inject constructor(
             // This happens when:
             // 1. Conversation table updates trigger messages Flow (foreign key) with 0 messages
             // 2. Message stream inserts trigger Flow with only the newly inserted message visible
-            if (messages.size < currentState.messages.size) {
-                Log.w(TAG, "💬 IGNORING incomplete message list - Room emitted stale/partial data (had ${currentState.messages.size}, got ${messages.size} messages)")
-                return
+            //
+            // HOWEVER: We must allow updates if there are NEW messages (different IDs)
+            // This happens when a message arrives during a sync operation
+            val finalMessages = if (messages.size < currentState.messages.size) {
+                // Check if there are any NEW message IDs that we haven't seen before
+                val currentMessageIds = currentState.messages.map { it.id }.toSet()
+                val newMessageIds = messages.map { it.id }.toSet()
+                val hasNewMessages = newMessageIds.any { it !in currentMessageIds }
+
+                if (hasNewMessages) {
+                    // This is partial data with new messages - MERGE instead of replacing
+                    // The next database emission should have all messages
+                    val newMessagesToAdd = messages.filter { it.id !in currentMessageIds }
+                    val merged = (currentState.messages + newMessagesToAdd).sortedByDescending { it.sentAt }
+                    Log.d(TAG, "💬 MERGING partial list with current messages (had ${currentState.messages.size}, got ${messages.size} partial, merged to ${merged.size}, new IDs: ${newMessageIds - currentMessageIds})")
+                    merged
+                } else {
+                    Log.w(TAG, "💬 IGNORING incomplete message list - Room emitted stale/partial data (had ${currentState.messages.size}, got ${messages.size} messages)")
+                    return
+                }
+            } else {
+                // Normal case: we have same or more messages than before
+                messages
             }
 
-            Log.d(TAG, "💬 Updating UI state with messages (current: ${currentState.messages.size} → new: ${messages.size})")
-            _uiState.value = currentState.copy(messages = messages)
+            Log.d(TAG, "💬 Updating UI state with messages (current: ${currentState.messages.size} → new: ${finalMessages.size})")
+            _uiState.value = currentState.copy(messages = finalMessages)
         } else {
             // State is still Loading - buffer messages to apply when conversation loads
             Log.d(TAG, "💬 Buffering ${messages.size} messages (UI state is ${currentState::class.simpleName})")
@@ -401,43 +441,39 @@ class ConversationViewModel @Inject constructor(
 
                 // Try to retrieve existing tag from group metadata, or generate new one
                 val inviteTag = try {
-                    val groupDescription = group.description()
-                    // Try to parse as hex string first (for backwards compatibility)
-                    val metadataBytes = if (groupDescription.matches(Regex("^[0-9a-fA-F]+$"))) {
-                        groupDescription.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                    } else {
-                        groupDescription.toByteArray()
-                    }
+                    // Use ConversationMetadataHelper which reads from appData() with description fallback
+                    val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
                     val customMetadata =
-                        ConversationMetadataProtos.ConversationCustomMetadata.parseFrom(
-                            metadataBytes
+                        com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(
+                            conversationGroup
                         )
-                    Log.d(TAG, "Found existing tag in group metadata: ${customMetadata.tag}")
-                    customMetadata.tag
+                    if (customMetadata != null && customMetadata.tag.isNotBlank()) {
+                        Log.d(TAG, "Found existing tag in group metadata: ${customMetadata.tag}")
+                        customMetadata.tag
+                    } else {
+                        throw IllegalStateException("Tag is empty or metadata is null")
+                    }
                 } catch (e: Exception) {
                     // No existing metadata, generate new tag and store it
                     val newTag = UUID.randomUUID().toString()
                     Log.d(TAG, "No existing tag found, generating new tag: $newTag")
 
-                    // Create metadata with the tag
-                    val metadataBuilder =
-                        ConversationMetadataProtos.ConversationCustomMetadata.newBuilder()
-                            .setTag(newTag)
-
-                    // ConversationCustomMetadata only has: tag, profiles, expiresAtUnix
-                    // Other fields (name, description, imageURL) are in the InvitePayload
-
-                    val metadata = metadataBuilder.build()
-
-                    // Store metadata in group description - must be raw bytes, not string
+                    // Create metadata with the tag using ConversationMetadataHelper
                     try {
-                        // Convert protobuf bytes to hex string for safe storage
-                        val metadataBytes = metadata.toByteArray()
-                        val hexString = metadataBytes.joinToString("") { "%02x".format(it) }
-                        group.updateDescription(hexString)
-                        Log.d(TAG, "Updated group metadata with tag: $newTag")
+                        val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
+                        val metadataBuilder =
+                            ConversationMetadataProtos.ConversationCustomMetadata.newBuilder()
+                                .setTag(newTag)
+                        val metadata = metadataBuilder.build()
+
+                        // Store in appData() using ConversationMetadataHelper
+                        com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.storeMetadata(
+                            conversationGroup,
+                            metadata
+                        )
+                        Log.d(TAG, "Stored new tag in group appData: $newTag")
                     } catch (updateError: Exception) {
-                        Log.e(TAG, "Failed to update group metadata", updateError)
+                        Log.e(TAG, "Failed to store group metadata", updateError)
                     }
 
                     newTag

@@ -27,8 +27,15 @@ class MessageRepository @Inject constructor(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun getMessages(conversationId: String): Flow<List<Message>> {
-        return messageDao.getMessages(conversationId)
+    /**
+     * Gets the most recent messages for a conversation.
+     *
+     * @param conversationId The conversation ID
+     * @param limit Maximum number of recent messages to load (default: 200)
+     * @return Flow of messages ordered by sentAt DESC (newest first)
+     */
+    fun getMessages(conversationId: String, limit: Int = 200): Flow<List<Message>> {
+        return messageDao.getMessagesWithLimit(conversationId, limit)
             .map { entities -> entities.map { it.toDomain() } }
     }
 
@@ -213,7 +220,8 @@ class MessageRepository @Inject constructor(
                     return@launch
                 }
 
-                Log.d(TAG, "Starting message streaming for conversation: $conversationId")
+                Log.d(TAG, "🚀 STARTING MESSAGE STREAMING for conversation: $conversationId, inbox: $inboxId")
+                Log.d(TAG, "   Client inbox: ${client.inboxId}")
 
                 // Get member profiles from database
                 val memberProfiles = try {
@@ -224,21 +232,28 @@ class MessageRepository @Inject constructor(
                     emptyMap()
                 }
 
+                Log.d(TAG, "📡 Calling conversation.streamMessages()...")
                 conversation.streamMessages()
                     .catch { e ->
-                        Log.e(TAG, "Error in message stream", e)
+                        Log.e(TAG, "❌ ERROR IN MESSAGE STREAM", e)
                     }
                     .collect { decodedMessage ->
+                        Log.d(TAG, "")
+                        Log.d(TAG, "========================================")
+                        Log.d(TAG, "📨 NEW MESSAGE RECEIVED VIA STREAM")
+                        Log.d(TAG, "========================================")
                         val contentType = try {
                             decodedMessage.encodedContent.type.typeId
                         } catch (e: Exception) {
                             "text"
                         }
 
-                        Log.d(TAG, "📨 Received message via stream: ${decodedMessage.id}")
+                        Log.d(TAG, "   Message ID: ${decodedMessage.id}")
                         Log.d(TAG, "   Content Type: $contentType")
                         Log.d(TAG, "   Full Type: ${decodedMessage.encodedContent.type}")
-                        Log.d(TAG, "   Sender: ${decodedMessage.senderInboxId}")
+                        Log.d(TAG, "   Sender Inbox ID: ${decodedMessage.senderInboxId}")
+                        Log.d(TAG, "   Client Inbox ID: ${client.inboxId}")
+                        Log.d(TAG, "   Is from me? ${decodedMessage.senderInboxId == client.inboxId}")
 
                         // Skip unsupported system messages
                         val skipTypes = listOf(
@@ -247,7 +262,7 @@ class MessageRepository @Inject constructor(
                         )
 
                         if (skipTypes.any { contentType.contains(it, ignoreCase = true) }) {
-                            Log.d(TAG, "  Skipping message type: $contentType")
+                            Log.w(TAG, "⏭️  SKIPPING MESSAGE - Unsupported type: $contentType")
                             return@collect
                         }
 
@@ -292,10 +307,11 @@ class MessageRepository @Inject constructor(
 
                                     // Check if this looks like an invite code (base64url encoded protobuf)
                                     if (isLikelyInviteCode(rawContent)) {
-                                        Log.d(
+                                        Log.w(
                                             TAG,
-                                            "  Detected invite code message in stream, hiding from conversation"
+                                            "⏭️  SKIPPING MESSAGE - Detected invite code, hiding from conversation"
                                         )
+                                        Log.d(TAG, "   Content preview: ${rawContent.take(50)}")
                                         return@collect // Skip invite code messages
                                     }
 
@@ -312,8 +328,8 @@ class MessageRepository @Inject constructor(
                             }
                         }
 
-                        Log.d(TAG, "  - Content: ${messageContent.take(100)}")
-                        Log.d(TAG, "  - Sent at: ${decodedMessage.sentAtNs}")
+                        Log.d(TAG, "   Content preview: ${messageContent.take(100)}")
+                        Log.d(TAG, "   Sent at (ns): ${decodedMessage.sentAtNs}")
 
                         val entity = com.naomiplasterer.convos.data.local.entity.MessageEntity(
                             id = decodedMessage.id,
@@ -326,15 +342,21 @@ class MessageRepository @Inject constructor(
                             deliveredAt = null
                         )
 
+                        Log.d(TAG, "💾 Inserting message into database...")
                         messageDao.insert(entity)
-                        Log.d(TAG, "Message inserted into database")
+                        Log.d(TAG, "✅ MESSAGE SUCCESSFULLY INSERTED INTO DATABASE")
+                        Log.d(TAG, "   ID: ${entity.id}")
+                        Log.d(TAG, "   Sender: ${entity.senderInboxId}")
+                        Log.d(TAG, "   Type: ${entity.contentType}")
 
                         // Update conversation's lastMessageAt
                         conversationDao.updateLastMessageTime(conversationId, entity.sentAt)
                         Log.d(
                             TAG,
-                            "Updated lastMessageAt for conversation $conversationId to ${entity.sentAt}"
+                            "📅 Updated lastMessageAt for conversation $conversationId to ${entity.sentAt}"
                         )
+                        Log.d(TAG, "========================================")
+                        Log.d(TAG, "")
                     }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start message streaming", e)

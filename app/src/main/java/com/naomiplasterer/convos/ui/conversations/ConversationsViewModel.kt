@@ -109,8 +109,10 @@ class ConversationsViewModel @Inject constructor(
                                 )
                             }
                         )
-                        // Start streaming for real-time updates
+                        // Start streaming for real-time updates (matches iOS streaming architecture)
                         conversationRepository.startConversationStreaming(inboxId)
+                        // Start message streaming to process join requests in real-time
+                        conversationRepository.startMessageStreaming(inboxId)
                     },
                     onFailure = { error ->
                         Log.e(
@@ -203,14 +205,14 @@ class ConversationsViewModel @Inject constructor(
     }
 
     /**
-     * Start periodic syncing to process incoming join requests.
-     * This ensures that when someone sends a join request, the creator
-     * will process it within 30 seconds even if they're not actively using the app.
+     * Start periodic syncing as a fallback for real-time streams.
+     * Primary detection happens via message/conversation streams (instant).
+     * This provides a safety net in case streams fail, processing within 10 seconds.
      */
     private fun startPeriodicSync() {
         viewModelScope.launch {
             while (true) {
-                delay(30_000) // Sync every 30 seconds (reduced frequency to minimize UI updates)
+                delay(10_000) // Sync every 10 seconds as fallback (primary detection via real-time streams)
 
                 // Only sync if we have an active session
                 val sessionState = sessionManager.sessionState.value

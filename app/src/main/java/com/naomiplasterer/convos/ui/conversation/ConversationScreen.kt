@@ -51,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -511,6 +513,8 @@ private fun MessageInput(
     enabled: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val focusRequester = remember { FocusRequester() }
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         tonalElevation = 0.dp
@@ -525,7 +529,9 @@ private fun MessageInput(
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
                 placeholder = { Text("Message") },
                 enabled = enabled,
                 maxLines = 4,
@@ -533,7 +539,11 @@ private fun MessageInput(
             )
 
             IconButton(
-                onClick = onSendClick,
+                onClick = {
+                    onSendClick()
+                    // Keep keyboard open by requesting focus back on the text field
+                    focusRequester.requestFocus()
+                },
                 enabled = enabled && text.isNotBlank(),
                 modifier = Modifier.size(48.dp)
             ) {
