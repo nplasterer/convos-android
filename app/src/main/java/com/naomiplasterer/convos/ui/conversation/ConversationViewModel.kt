@@ -57,6 +57,7 @@ class ConversationViewModel @Inject constructor(
     // Cache members to prevent creating new objects on every Flow emission
     private var cachedMembers: List<com.naomiplasterer.convos.domain.model.Member> = emptyList()
     private var cachedMemberCount: Int = 0
+    private var lastMemberLoadTime: Long = 0
 
     // Cache full conversation to prevent unnecessary UI updates when only timestamps change
     private var cachedConversation: Conversation? = null
@@ -172,21 +173,29 @@ class ConversationViewModel @Inject constructor(
             }
 
             // Determine which conversation object to use in UI state
-            val conversationWithMembers = if (cachedConversation != null && conversationForComparison.meaningfullyEquals(cachedConversation)) {
-                // Conversation hasn't meaningfully changed - reuse the EXACT same cached object
-                // This prevents Compose from seeing a "new" object and recomposing unnecessarily
+            val now = System.currentTimeMillis()
+            val memberRefreshInterval = 10_000L // Reload members every 10 seconds
+            val shouldRefreshMembers = (now - lastMemberLoadTime) > memberRefreshInterval
+
+            val conversationWithMembers = if (cachedConversation != null && conversationForComparison.meaningfullyEquals(cachedConversation) && !shouldRefreshMembers) {
+                // Conversation hasn't meaningfully changed and members were recently loaded
+                // Reuse the EXACT same cached object to prevent unnecessary recomposition
                 Log.d(TAG, "Conversation hasn't meaningfully changed, reusing cached conversation object")
                 cachedConversation!! // Use the exact same reference
             } else {
-                // Conversation has changed - determine if we need to reload members
+                // Conversation has changed OR members need refresh - determine if we need to reload members
                 val updated = if (conversationForComparison.members.isNotEmpty() &&
                                   conversationForComparison.members.size != cachedMemberCount) {
                     // Member count changed, reload
                     Log.d(TAG, "Member count changed (${cachedMemberCount} → ${conversationForComparison.members.size}), reloading members...")
                     loadConversationMembers(conversation)
-                } else if (cachedMembers.isEmpty()) {
-                    // First load
-                    Log.d(TAG, "First load, fetching members...")
+                } else if (cachedMembers.isEmpty() || shouldRefreshMembers) {
+                    // First load OR time to refresh
+                    if (shouldRefreshMembers) {
+                        Log.d(TAG, "Refreshing members (last load was ${(now - lastMemberLoadTime) / 1000}s ago)...")
+                    } else {
+                        Log.d(TAG, "First load, fetching members...")
+                    }
                     loadConversationMembers(conversation)
                 } else {
                     // Reuse cached members
@@ -267,6 +276,7 @@ class ConversationViewModel @Inject constructor(
             // Cache the members and member count
             cachedMembers = members
             cachedMemberCount = members.size
+            lastMemberLoadTime = System.currentTimeMillis()
 
             conversation.copy(members = members)
         } catch (e: Exception) {
@@ -325,9 +335,6 @@ class ConversationViewModel @Inject constructor(
         val text = _messageText.value.trim()
         if (text.isEmpty() || _isSending.value) return
 
-        // Clear message text immediately
-        _messageText.value = ""
-
         viewModelScope.launch {
             _isSending.value = true
 
@@ -352,11 +359,12 @@ class ConversationViewModel @Inject constructor(
             ).fold(
                 onSuccess = {
                     Log.d(TAG, "Message sent successfully")
+                    // Clear text after successful send (not immediately, to prevent keyboard dismissal)
+                    _messageText.value = ""
                 },
                 onFailure = { error ->
                     Log.e(TAG, "Failed to send message", error)
-                    // Optionally restore the message text on failure
-                    // _messageText.value = text
+                    // Don't clear text on failure so user can retry
                 }
             )
 

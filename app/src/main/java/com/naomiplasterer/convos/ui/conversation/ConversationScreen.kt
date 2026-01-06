@@ -51,11 +51,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -88,7 +88,13 @@ fun ConversationScreen(
     // Helper to check if conversation should show delete prompt (only 1 member)
     val shouldPromptDelete = remember(uiState) {
         when (val state = uiState) {
-            is ConversationUiState.Success -> state.conversation.members.size <= 1
+            is ConversationUiState.Success -> {
+                val memberCount = state.conversation.members.size
+                val shouldPrompt = state.conversation.members.isNotEmpty() && memberCount == 1
+                android.util.Log.d("ConversationScreen", "Delete check: members.size=$memberCount, isEmpty=${state.conversation.members.isEmpty()}, shouldPrompt=$shouldPrompt")
+                // Only show dialog if members have been loaded AND there's exactly 1 member (creator alone)
+                shouldPrompt
+            }
             else -> false
         }
     }
@@ -513,8 +519,6 @@ private fun MessageInput(
     enabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val focusRequester = remember { FocusRequester() }
-
     Surface(
         modifier = modifier.fillMaxWidth(),
         tonalElevation = 0.dp
@@ -529,22 +533,19 @@ private fun MessageInput(
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(focusRequester),
+                modifier = Modifier.weight(1f),
                 placeholder = { Text("Message") },
-                enabled = enabled,
+                enabled = true, // Always keep TextField enabled so keyboard doesn't dismiss
                 maxLines = 4,
-                shape = RoundedCornerShape(CornerRadius.medium)
+                shape = RoundedCornerShape(CornerRadius.medium),
+                keyboardOptions = KeyboardOptions(
+                    imeAction = ImeAction.None
+                )
             )
 
             IconButton(
-                onClick = {
-                    onSendClick()
-                    // Keep keyboard open by requesting focus back on the text field
-                    focusRequester.requestFocus()
-                },
-                enabled = enabled && text.isNotBlank(),
+                onClick = onSendClick,
+                enabled = enabled && text.isNotBlank(), // Only disable send button, not TextField
                 modifier = Modifier.size(48.dp)
             ) {
                 Icon(

@@ -34,9 +34,6 @@ import com.google.mlkit.vision.common.InputImage
 import com.naomiplasterer.convos.ui.theme.Spacing
 import android.util.Log
 import androidx.annotation.OptIn
-import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -177,11 +174,8 @@ private fun CameraPreviewWithScanner(
                                             TAG,
                                             "QR code successfully scanned (attempt #$scanAttempts), showing feedback"
                                         )
-                                        // Add a small delay before calling the callback to ensure UI updates first
-                                        kotlinx.coroutines.MainScope().launch {
-                                            kotlinx.coroutines.delay(200)
-                                            onQRCodeScanned(qrCode)
-                                        }
+                                        // Call callback immediately - NewConversationScreen will handle state transition
+                                        onQRCodeScanned(qrCode)
                                     }
                                 }
                             )

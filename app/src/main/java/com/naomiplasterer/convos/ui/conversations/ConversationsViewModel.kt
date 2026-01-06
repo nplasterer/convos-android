@@ -43,6 +43,9 @@ class ConversationsViewModel @Inject constructor(
     )
     val hasCreatedMoreThanOneConvo: StateFlow<Boolean> = _hasCreatedMoreThanOneConvo.asStateFlow()
 
+    // Track initial sync completion to match iOS ValueObservation pattern
+    private var isInitialSyncComplete = false
+
 
     init {
         observeSession()
@@ -77,6 +80,9 @@ class ConversationsViewModel @Inject constructor(
         try {
             Log.d(TAG, "loadAllConversations: Starting to load conversations from all inboxes")
 
+            // Reset sync flag when starting a new load
+            isInitialSyncComplete = false
+
             // First, clean up any expired inboxes
             conversationRepository.cleanupExpiredInboxes()
 
@@ -85,49 +91,57 @@ class ConversationsViewModel @Inject constructor(
             Log.d(TAG, "loadAllConversations: Found ${allInboxIds.size} inboxes")
 
             if (allInboxIds.isEmpty()) {
+                isInitialSyncComplete = true
                 _uiState.value = ConversationsUiState.Empty
                 return
             }
 
-            // First, sync conversations from the network
-            for (inboxId in allInboxIds) {
-                // Ensure client is loaded before syncing
-                sessionManager.ensureClientLoaded(inboxId).fold(
-                    onSuccess = {
-                        conversationRepository.syncConversations(inboxId).fold(
-                            onSuccess = {
-                                Log.d(
-                                    TAG,
-                                    "loadAllConversations: Sync completed for inbox: $inboxId"
-                                )
-                            },
-                            onFailure = { error ->
-                                Log.e(
-                                    TAG,
-                                    "loadAllConversations: Sync failed for inbox: $inboxId",
-                                    error
-                                )
-                            }
-                        )
-                        // Start streaming for real-time updates (matches iOS streaming architecture)
-                        conversationRepository.startConversationStreaming(inboxId)
-                        // Start message streaming to process join requests in real-time
-                        conversationRepository.startMessageStreaming(inboxId)
-                    },
-                    onFailure = { error ->
-                        Log.e(
-                            TAG,
-                            "loadAllConversations: Failed to load client for inbox: $inboxId",
-                            error
-                        )
-                    }
-                )
-            }
-
-            // Now observe conversations from local DB
+            // Start observing database IMMEDIATELY (matches iOS ValueObservation pattern)
+            // This will show cached conversations right away if they exist
             observeAllConversations(allInboxIds)
+
+            // Run network sync in parallel (don't block database observation)
+            viewModelScope.launch {
+                for (inboxId in allInboxIds) {
+                    // Ensure client is loaded before syncing
+                    sessionManager.ensureClientLoaded(inboxId).fold(
+                        onSuccess = {
+                            conversationRepository.syncConversations(inboxId).fold(
+                                onSuccess = {
+                                    Log.d(
+                                        TAG,
+                                        "loadAllConversations: Sync completed for inbox: $inboxId"
+                                    )
+                                },
+                                onFailure = { error ->
+                                    Log.e(
+                                        TAG,
+                                        "loadAllConversations: Sync failed for inbox: $inboxId",
+                                        error
+                                    )
+                                }
+                            )
+                            // Start streaming for real-time updates (matches iOS streaming architecture)
+                            conversationRepository.startConversationStreaming(inboxId)
+                            // Start message streaming to process join requests in real-time
+                            conversationRepository.startMessageStreaming(inboxId)
+                        },
+                        onFailure = { error ->
+                            Log.e(
+                                TAG,
+                                "loadAllConversations: Failed to load client for inbox: $inboxId",
+                                error
+                            )
+                        }
+                    )
+                }
+                // Mark initial sync as complete after all inboxes finish
+                isInitialSyncComplete = true
+                Log.d(TAG, "loadAllConversations: Initial sync complete")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load all conversations", e)
+            isInitialSyncComplete = true
             _uiState.value = ConversationsUiState.Error(e.message ?: "Unknown error")
         }
     }
@@ -142,7 +156,7 @@ class ConversationsViewModel @Inject constructor(
             .collectLatest { allConversations ->
                 Log.d(
                     TAG,
-                    "observeAllConversations: Received ${allConversations.size} total conversations"
+                    "observeAllConversations: Received ${allConversations.size} total conversations, syncComplete=$isInitialSyncComplete"
                 )
 
                 if (allConversations.size > 1 && !_hasCreatedMoreThanOneConvo.value) {
@@ -151,8 +165,15 @@ class ConversationsViewModel @Inject constructor(
                 }
 
                 if (allConversations.isEmpty()) {
-                    Log.d(TAG, "observeAllConversations: No conversations, setting Empty state")
-                    _uiState.value = ConversationsUiState.Empty
+                    // Only show Empty (CTA) if we've completed the initial sync
+                    // Otherwise keep showing Loading spinner
+                    if (isInitialSyncComplete) {
+                        Log.d(TAG, "observeAllConversations: No conversations after sync complete, setting Empty state")
+                        _uiState.value = ConversationsUiState.Empty
+                    } else {
+                        Log.d(TAG, "observeAllConversations: No conversations yet, but sync still in progress, keeping Loading state")
+                        _uiState.value = ConversationsUiState.Loading
+                    }
                 } else {
                     Log.d(
                         TAG,
