@@ -239,24 +239,32 @@ class MessageRepository @Inject constructor(
 
             messageDao.insertAll(entities)
 
-            // Update conversation's lastMessageAt if we have messages
-            if (entities.isNotEmpty()) {
-                val latestMessageTime = entities.maxOfOrNull { it.sentAt }
+            // Update conversation's lastMessageAt based on non-update messages only (matching iOS behavior)
+            val nonUpdateMessages = entities.filter { it.contentType != "update" }
+            if (nonUpdateMessages.isNotEmpty()) {
+                val latestMessageTime = nonUpdateMessages.maxOfOrNull { it.sentAt }
                 if (latestMessageTime != null) {
-                    conversationDao.updateLastMessageTime(conversationId, latestMessageTime)
-                    Log.d(
-                        TAG,
-                        "Updated lastMessageAt for conversation $conversationId to $latestMessageTime"
-                    )
-
-                    // Force a refresh to ensure UI updates
-                    val conversation = conversationDao.getConversationSync(conversationId)
-                    if (conversation != null) {
-                        conversationDao.update(conversation.copy(
+                    // Get existing conversation to preserve other fields
+                    val existingConversation = conversationDao.getConversationSync(conversationId)
+                    if (existingConversation != null) {
+                        // Update the conversation with new lastMessageAt
+                        // This forces Room to emit a new value with the updated message preview
+                        conversationDao.update(existingConversation.copy(
                             lastMessageAt = latestMessageTime
                         ))
-                        Log.d(TAG, "Forced conversation refresh after sync for real-time UI update")
+                        Log.d(
+                            TAG,
+                            "Updated conversation $conversationId with lastMessageAt: $latestMessageTime"
+                        )
                     }
+                }
+            } else {
+                // Even if there are no non-update messages, force a refresh to ensure UI gets the latest state
+                val existingConversation = conversationDao.getConversationSync(conversationId)
+                if (existingConversation != null) {
+                    // Touch the conversation to force Room to re-evaluate the query
+                    conversationDao.update(existingConversation)
+                    Log.d(TAG, "Forced conversation refresh for $conversationId to update message preview")
                 }
             }
 
@@ -283,8 +291,16 @@ class MessageRepository @Inject constructor(
             // Update lastMessageAt immediately for better UX
             // This ensures the conversation moves to the top right away
             val currentTime = System.currentTimeMillis()
-            conversationDao.updateLastMessageTime(conversationId, currentTime)
-            Log.d(TAG, "Optimistically updated lastMessageAt for conversation $conversationId to $currentTime")
+
+            // Get existing conversation to preserve other fields
+            val existingConversation = conversationDao.getConversationSync(conversationId)
+            if (existingConversation != null) {
+                // Update the entire conversation entity
+                conversationDao.update(existingConversation.copy(
+                    lastMessageAt = currentTime
+                ))
+                Log.d(TAG, "Optimistically updated conversation $conversationId with lastMessageAt: $currentTime")
+            }
 
             // Send the message via XMTP
             val messageId = conversation.send(text)
@@ -525,21 +541,23 @@ class MessageRepository @Inject constructor(
                         Log.d(TAG, "   Sender: ${entity.senderInboxId}")
                         Log.d(TAG, "   Type: ${entity.contentType}")
 
-                        // Update conversation's lastMessageAt
-                        conversationDao.updateLastMessageTime(conversationId, entity.sentAt)
-                        Log.d(
-                            TAG,
-                            "📅 Updated lastMessageAt for conversation $conversationId to ${entity.sentAt}"
-                        )
-
-                        // Force a refresh by updating the conversation's updatedAt timestamp
-                        // This ensures Room's Flow will emit a new value
-                        val conversation = conversationDao.getConversationSync(conversationId)
-                        if (conversation != null) {
-                            conversationDao.update(conversation.copy(
-                                lastMessageAt = entity.sentAt
-                            ))
-                            Log.d(TAG, "🔄 Forced conversation refresh for real-time UI update")
+                        // Only update lastMessageAt for non-update messages (matching iOS behavior)
+                        if (entity.contentType != "update") {
+                            // Get existing conversation to preserve other fields
+                            val existingConversation = conversationDao.getConversationSync(conversationId)
+                            if (existingConversation != null) {
+                                // Update the entire conversation entity with new lastMessageAt
+                                // This ensures Room's Flow emits a new value with the updated message preview
+                                conversationDao.update(existingConversation.copy(
+                                    lastMessageAt = entity.sentAt
+                                ))
+                                Log.d(
+                                    TAG,
+                                    "📅 Updated conversation $conversationId with lastMessageAt: ${entity.sentAt} for real-time UI update"
+                                )
+                            }
+                        } else {
+                            Log.d(TAG, "⏭️ Skipping lastMessageAt update for 'update' message")
                         }
                         Log.d(TAG, "========================================")
                         Log.d(TAG, "")

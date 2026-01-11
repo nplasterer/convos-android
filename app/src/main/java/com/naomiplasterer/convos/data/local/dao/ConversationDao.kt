@@ -8,21 +8,23 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ConversationDao {
 
+    // Room doesn't automatically track tables in subqueries, so we need to explicitly
+    // reference the messages table to ensure Room re-runs this query when messages change
     @Query("""
-        SELECT c.*,
-               (SELECT m2.content
-                FROM messages m2
-                WHERE m2.conversationId = c.id
-                ORDER BY m2.sentAt DESC
-                LIMIT 1) as lastMessagePreview
+        SELECT
+            c.*,
+            (SELECT m.content
+             FROM messages m
+             WHERE m.conversationId = c.id
+               AND m.contentType != 'update'
+             ORDER BY m.sentAt DESC
+             LIMIT 1) as lastMessagePreview
         FROM conversations c
-        LEFT JOIN messages m ON c.id = m.conversationId
         WHERE c.inboxId = :inboxId
           AND c.consent = 'allowed'
           AND c.isDraft = 0
           AND c.kind = 'group'
           AND (c.expiresAt IS NULL OR c.expiresAt > :currentTimeMillis)
-        GROUP BY c.id
         ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
     """)
     fun getAllowedConversations(
@@ -30,21 +32,23 @@ interface ConversationDao {
         currentTimeMillis: Long = System.currentTimeMillis()
     ): Flow<List<ConversationWithMessage>>
 
+    // Room doesn't automatically track tables in subqueries, so we need to explicitly
+    // reference the messages table to ensure Room re-runs this query when messages change
     @Query("""
-        SELECT c.*,
-               (SELECT m2.content
-                FROM messages m2
-                WHERE m2.conversationId = c.id
-                ORDER BY m2.sentAt DESC
-                LIMIT 1) as lastMessagePreview
+        SELECT
+            c.*,
+            (SELECT m.content
+             FROM messages m
+             WHERE m.conversationId = c.id
+               AND m.contentType != 'update'
+             ORDER BY m.sentAt DESC
+             LIMIT 1) as lastMessagePreview
         FROM conversations c
-        LEFT JOIN messages m ON c.id = m.conversationId
         WHERE c.inboxId IN (:inboxIds)
           AND c.consent = 'allowed'
           AND c.isDraft = 0
           AND c.kind = 'group'
           AND (c.expiresAt IS NULL OR c.expiresAt > :currentTimeMillis)
-        GROUP BY c.id
         ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
     """)
     fun getAllowedConversationsFromAllInboxes(

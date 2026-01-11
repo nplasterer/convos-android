@@ -37,6 +37,21 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteAllForConversation(conversationId: String)
 
+    // Trigger query to observe message changes for a conversation
+    // This ensures Room tracks the messages table and triggers UI updates
+    @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
+    fun observeMessageCount(conversationId: String): Flow<Int>
+
+    // Get the latest message content for a conversation (excluding updates)
+    @Query("""
+        SELECT content FROM messages
+        WHERE conversationId = :conversationId
+          AND contentType != 'update'
+        ORDER BY sentAt DESC
+        LIMIT 1
+    """)
+    fun getLatestMessageContent(conversationId: String): Flow<String?>
+
     @Query("""
         SELECT conversationId, MAX(sentAt) as lastMessageTime
         FROM messages

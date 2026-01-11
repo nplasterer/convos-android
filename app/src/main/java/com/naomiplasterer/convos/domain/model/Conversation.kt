@@ -35,8 +35,9 @@ enum class ConversationKind {
 }
 
 /**
- * Check if two conversations are meaningfully equal (ignoring timestamps and preview).
+ * Check if two conversations are meaningfully equal.
  * This is used to prevent unnecessary UI updates when only timestamps change.
+ * IMPORTANT: Includes lastMessagePreview to ensure UI updates when messages change.
  */
 fun Conversation.meaningfullyEquals(other: Conversation?): Boolean {
     if (other == null) return false
@@ -57,8 +58,9 @@ fun Conversation.meaningfullyEquals(other: Conversation?): Boolean {
             isMuted == other.isMuted &&
             isDraft == other.isDraft &&
             expiresAt == other.expiresAt &&
+            lastMessagePreview == other.lastMessagePreview &&  // Include to trigger UI updates when messages change
             members == other.members
-    // Intentionally excluded: createdAt, lastMessageAt, lastMessagePreview
+    // Intentionally excluded: createdAt, lastMessageAt (timestamps change frequently without meaningful impact)
 }
 
 /**
