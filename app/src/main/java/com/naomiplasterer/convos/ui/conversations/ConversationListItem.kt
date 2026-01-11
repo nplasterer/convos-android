@@ -94,20 +94,21 @@ fun ConversationListItem(
                         horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (conversation.lastMessageAt != null) {
-                            Text(
-                                text = formatTimestamp(conversation.lastMessageAt),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (conversation.isUnread) {
-                                    MaterialTheme.colorScheme.onSurface
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
+                        // Always show timestamp if we have a last message time or creation time
+                        val timestampToShow = conversation.lastMessageAt ?: conversation.createdAt
+                        Text(
+                            text = formatTimestamp(timestampToShow),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (conversation.isUnread) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
 
-                        if (conversation.lastMessagePreview != null) {
-                            Text(text = "•", style = MaterialTheme.typography.labelMedium)
+                        // Show last message preview if available
+                        if (!conversation.lastMessagePreview.isNullOrBlank()) {
+                            Text(text = " • ", style = MaterialTheme.typography.labelMedium)
                             Text(
                                 text = conversation.lastMessagePreview,
                                 style = MaterialTheme.typography.labelMedium,
@@ -116,6 +117,16 @@ fun ConversationListItem(
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            // Show empty state or placeholder
+                            Text(
+                                text = " • No messages yet",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)

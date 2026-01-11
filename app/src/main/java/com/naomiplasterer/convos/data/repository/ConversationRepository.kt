@@ -4,6 +4,7 @@ import com.naomiplasterer.convos.data.invite.InviteJoinRequestsManager
 import com.naomiplasterer.convos.data.local.dao.ConversationDao
 import com.naomiplasterer.convos.data.local.dao.InboxDao
 import com.naomiplasterer.convos.data.local.dao.MemberProfileDao
+import com.naomiplasterer.convos.data.local.dao.MessageDao
 import com.naomiplasterer.convos.data.local.entity.MemberProfileEntity
 import com.naomiplasterer.convos.data.mapper.toDomain
 import com.naomiplasterer.convos.data.mapper.toEntity
@@ -15,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -30,6 +32,7 @@ class ConversationRepository @Inject constructor(
     private val conversationDao: ConversationDao,
     private val inboxDao: InboxDao,
     private val memberProfileDao: MemberProfileDao,
+    private val messageDao: MessageDao,
     private val xmtpClientManager: XMTPClientManager,
     private val inviteJoinRequestsManager: InviteJoinRequestsManager
 ) {
@@ -37,18 +40,22 @@ class ConversationRepository @Inject constructor(
 
     fun getConversations(inboxId: String): Flow<List<Conversation>> {
         return conversationDao.getAllowedConversations(inboxId)
-            .map { entities ->
+            .map { conversationsWithMessages ->
                 Log.d(
                     TAG,
-                    "getConversations: Found ${entities.size} allowed conversations for inbox: $inboxId"
+                    "getConversations: Found ${conversationsWithMessages.size} allowed conversations for inbox: $inboxId"
                 )
-                entities.forEach { entity ->
+                conversationsWithMessages.forEach { cwm ->
                     Log.d(
                         TAG,
-                        "  - Conversation ${entity.id}: consent=${entity.consent}, isDraft=${entity.isDraft}, name=${entity.name}"
+                        "  - Conversation ${cwm.id}: consent=${cwm.consent}, isDraft=${cwm.isDraft}, name=${cwm.name}"
                     )
                 }
-                entities.map { it.toDomain() }
+                conversationsWithMessages.map { cwm ->
+                    cwm.toConversationEntity().toDomain(
+                        lastMessagePreview = cwm.lastMessagePreview
+                    )
+                }
             }
     }
 
@@ -84,12 +91,22 @@ class ConversationRepository @Inject constructor(
 
     fun getConversationsFromAllInboxes(inboxIds: List<String>): Flow<List<Conversation>> {
         return conversationDao.getAllowedConversationsFromAllInboxes(inboxIds)
-            .map { entities ->
+            .map { conversationsWithMessages ->
                 Log.d(
                     TAG,
-                    "getConversationsFromAllInboxes: Found ${entities.size} allowed conversations from ${inboxIds.size} inboxes"
+                    "getConversationsFromAllInboxes: Found ${conversationsWithMessages.size} allowed conversations from ${inboxIds.size} inboxes"
                 )
-                entities.map { it.toDomain() }
+
+                // Log the messages to debug
+                conversationsWithMessages.forEach { cwm ->
+                    Log.d(TAG, "Conversation ${cwm.name}: lastMessage=${cwm.lastMessagePreview?.take(20)}, lastMessageAt=${cwm.lastMessageAt}")
+                }
+
+                conversationsWithMessages.map { cwm ->
+                    cwm.toConversationEntity().toDomain(
+                        lastMessagePreview = cwm.lastMessagePreview
+                    )
+                }
             }
             .catch { e ->
                 Log.e(TAG, "Error getting conversations from all inboxes", e)
@@ -240,12 +257,13 @@ class ConversationRepository @Inject constructor(
                         consent = finalConsent, // Use updated consent if matched to pending invite
                         isPinned = existing.isPinned, // Preserve pinned state
                         isMuted = existing.isMuted, // Preserve muted state
-                        isUnread = existing.isUnread // Preserve unread state
+                        isUnread = existing.isUnread, // Preserve unread state
+                        lastMessageAt = existing.lastMessageAt // Preserve lastMessageAt to maintain ordering
                     )
                     conversationDao.insert(entity)
                     Log.d(
                         TAG,
-                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}'"
+                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}', lastMessageAt=${existing.lastMessageAt}"
                     )
                 } else {
                     // New conversation - check XMTP consent state

@@ -54,3 +54,4 @@ google-services.json
 
 # Signing files
 .signing/
+/.claude/

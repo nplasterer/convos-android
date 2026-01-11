@@ -2,22 +2,55 @@ package com.naomiplasterer.convos.data.local.dao
 
 import androidx.room.*
 import com.naomiplasterer.convos.data.local.entity.ConversationEntity
+import com.naomiplasterer.convos.data.local.entity.ConversationWithMessage
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ConversationDao {
 
-    @Query("SELECT * FROM conversations WHERE inboxId = :inboxId AND consent = 'allowed' AND isDraft = 0 AND kind = 'group' AND (expiresAt IS NULL OR expiresAt > :currentTimeMillis) ORDER BY COALESCE(lastMessageAt, createdAt) DESC")
+    @Query("""
+        SELECT c.*,
+               (SELECT m2.content
+                FROM messages m2
+                WHERE m2.conversationId = c.id
+                ORDER BY m2.sentAt DESC
+                LIMIT 1) as lastMessagePreview
+        FROM conversations c
+        LEFT JOIN messages m ON c.id = m.conversationId
+        WHERE c.inboxId = :inboxId
+          AND c.consent = 'allowed'
+          AND c.isDraft = 0
+          AND c.kind = 'group'
+          AND (c.expiresAt IS NULL OR c.expiresAt > :currentTimeMillis)
+        GROUP BY c.id
+        ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
+    """)
     fun getAllowedConversations(
         inboxId: String,
         currentTimeMillis: Long = System.currentTimeMillis()
-    ): Flow<List<ConversationEntity>>
+    ): Flow<List<ConversationWithMessage>>
 
-    @Query("SELECT * FROM conversations WHERE inboxId IN (:inboxIds) AND consent = 'allowed' AND isDraft = 0 AND kind = 'group' AND (expiresAt IS NULL OR expiresAt > :currentTimeMillis) ORDER BY COALESCE(lastMessageAt, createdAt) DESC")
+    @Query("""
+        SELECT c.*,
+               (SELECT m2.content
+                FROM messages m2
+                WHERE m2.conversationId = c.id
+                ORDER BY m2.sentAt DESC
+                LIMIT 1) as lastMessagePreview
+        FROM conversations c
+        LEFT JOIN messages m ON c.id = m.conversationId
+        WHERE c.inboxId IN (:inboxIds)
+          AND c.consent = 'allowed'
+          AND c.isDraft = 0
+          AND c.kind = 'group'
+          AND (c.expiresAt IS NULL OR c.expiresAt > :currentTimeMillis)
+        GROUP BY c.id
+        ORDER BY COALESCE(c.lastMessageAt, c.createdAt) DESC
+    """)
     fun getAllowedConversationsFromAllInboxes(
         inboxIds: List<String>,
         currentTimeMillis: Long = System.currentTimeMillis()
-    ): Flow<List<ConversationEntity>>
+    ): Flow<List<ConversationWithMessage>>
 
     @Query("SELECT * FROM conversations WHERE id = :conversationId")
     fun getConversation(conversationId: String): Flow<ConversationEntity?>

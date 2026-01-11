@@ -11,6 +11,8 @@ import com.naomiplasterer.convos.ui.conversation.ConversationScreen
 import com.naomiplasterer.convos.ui.conversations.ConversationsScreen
 import com.naomiplasterer.convos.ui.newconversation.NewConversationMode
 import com.naomiplasterer.convos.ui.newconversation.NewConversationScreen
+import com.naomiplasterer.convos.ui.profile.MyInfoScreen
+import com.naomiplasterer.convos.ui.settings.QuicknameSettingsScreen
 import com.naomiplasterer.convos.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
@@ -20,6 +22,10 @@ sealed class Screen(val route: String) {
     }
     object NewConversation : Screen("new_conversation")
     object Settings : Screen("settings")
+    object MyInfo : Screen("my_info/{conversationId}/{inboxId}") {
+        fun createRoute(conversationId: String, inboxId: String) = "my_info/$conversationId/$inboxId"
+    }
+    object QuicknameSettings : Screen("quickname_settings")
 }
 
 @Composable
@@ -111,6 +117,31 @@ fun ConvosNavigation(
 
         composable(Screen.Settings.route) {
             SettingsScreen(
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.MyInfo.route,
+            arguments = listOf(
+                navArgument("conversationId") { type = NavType.StringType },
+                navArgument("inboxId") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val conversationId = backStackEntry.arguments?.getString("conversationId") ?: return@composable
+            val inboxId = backStackEntry.arguments?.getString("inboxId") ?: return@composable
+            MyInfoScreen(
+                conversationId = conversationId,
+                inboxId = inboxId,
+                onNavigateToQuicknameSettings = {
+                    navController.navigate(Screen.QuicknameSettings.route)
+                },
+                onBackClick = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.QuicknameSettings.route) {
+            QuicknameSettingsScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }

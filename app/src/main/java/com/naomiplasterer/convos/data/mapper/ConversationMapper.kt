@@ -5,7 +5,7 @@ import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.ConsentState
 import com.naomiplasterer.convos.domain.model.ConversationKind
 
-fun ConversationEntity.toDomain(): Conversation {
+fun ConversationEntity.toDomain(lastMessagePreview: String? = null): Conversation {
     return Conversation(
         id = id,
         inboxId = inboxId,
@@ -32,7 +32,8 @@ fun ConversationEntity.toDomain(): Conversation {
         isDraft = isDraft,
         createdAt = createdAt,
         lastMessageAt = lastMessageAt,
-        expiresAt = expiresAt
+        expiresAt = expiresAt,
+        lastMessagePreview = lastMessagePreview
     )
 }
 

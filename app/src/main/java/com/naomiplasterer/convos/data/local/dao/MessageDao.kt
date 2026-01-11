@@ -36,4 +36,29 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteAllForConversation(conversationId: String)
+
+    @Query("""
+        SELECT conversationId, MAX(sentAt) as lastMessageTime
+        FROM messages
+        WHERE conversationId IN (:conversationIds)
+        GROUP BY conversationId
+    """)
+    fun getLastMessageTimes(conversationIds: List<String>): Flow<List<LastMessageInfo>>
+
+    @Query("""
+        SELECT m.*
+        FROM messages m
+        INNER JOIN (
+            SELECT conversationId, MAX(sentAt) as maxSentAt
+            FROM messages
+            WHERE conversationId IN (:conversationIds)
+            GROUP BY conversationId
+        ) latest ON m.conversationId = latest.conversationId AND m.sentAt = latest.maxSentAt
+    """)
+    fun getLastMessages(conversationIds: List<String>): Flow<List<MessageEntity>>
 }
+
+data class LastMessageInfo(
+    val conversationId: String,
+    val lastMessageTime: Long?
+)

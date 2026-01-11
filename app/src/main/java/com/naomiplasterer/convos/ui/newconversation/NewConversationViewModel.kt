@@ -588,8 +588,8 @@ class NewConversationViewModel @Inject constructor(
                     null
                 }
             }
-            // Raw invite code (base64url or alphanumeric characters)
-            qrCodeData.matches(Regex("^[a-zA-Z0-9-_]+$")) -> {
+            // Raw invite code (base64url or alphanumeric characters, may include * separators)
+            qrCodeData.matches(Regex("^[a-zA-Z0-9-_*]+$")) -> {
                 Log.d(TAG, "✅ Matched raw invite code format")
                 Log.d(TAG, "   Code length: ${qrCodeData.length}")
                 Log.d(TAG, "   Code: ${qrCodeData.take(50)}...")

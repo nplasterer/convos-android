@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.naomiplasterer.convos.data.repository.ConversationRepository
+import com.naomiplasterer.convos.data.repository.MessageRepository
 import com.naomiplasterer.convos.data.session.SessionManager
 import com.naomiplasterer.convos.data.session.SessionState
 import com.naomiplasterer.convos.domain.model.Conversation
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import android.util.Log
@@ -27,6 +29,7 @@ private const val TAG = "ConversationsViewModel"
 @HiltViewModel
 class ConversationsViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
+    private val messageRepository: MessageRepository,
     private val sessionManager: SessionManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -112,6 +115,22 @@ class ConversationsViewModel @Inject constructor(
                                         TAG,
                                         "loadAllConversations: Sync completed for inbox: $inboxId"
                                     )
+
+                                    // Sync messages for each conversation to have content to display
+                                    val conversations = conversationRepository.getConversations(inboxId).first()
+                                    for (conversation in conversations) {
+                                        messageRepository.syncMessages(inboxId, conversation.id).fold(
+                                            onSuccess = {
+                                                Log.d(TAG, "Synced messages for: ${conversation.name ?: conversation.id}")
+                                                // Start message streaming for real-time updates
+                                                messageRepository.startMessageStreaming(inboxId, conversation.id)
+                                                Log.d(TAG, "Started message streaming for: ${conversation.id}")
+                                            },
+                                            onFailure = { error ->
+                                                Log.w(TAG, "Failed to sync messages for: ${conversation.id}", error)
+                                            }
+                                        )
+                                    }
                                 },
                                 onFailure = { error ->
                                     Log.e(
@@ -158,6 +177,17 @@ class ConversationsViewModel @Inject constructor(
                     TAG,
                     "observeAllConversations: Received ${allConversations.size} total conversations, syncComplete=$isInitialSyncComplete"
                 )
+
+                // Log conversation order to track proper sorting by lastMessageAt
+                if (allConversations.isNotEmpty()) {
+                    Log.d(TAG, "Conversation order (by lastMessageAt):")
+                    allConversations.take(5).forEach { conv ->
+                        Log.d(
+                            TAG,
+                            "  - ${conv.name ?: conv.id.take(8)}: lastMessageAt=${conv.lastMessageAt}, createdAt=${conv.createdAt}, preview=${conv.lastMessagePreview?.take(30)}"
+                        )
+                    }
+                }
 
                 if (allConversations.size > 1 && !_hasCreatedMoreThanOneConvo.value) {
                     _hasCreatedMoreThanOneConvo.value = true
@@ -241,12 +271,42 @@ class ConversationsViewModel @Inject constructor(
                     try {
                         val allInboxIds = sessionManager.getAllInboxIds()
                         for (inboxId in allInboxIds) {
-                            conversationRepository.syncConversations(inboxId).fold(
+                            // Ensure client is loaded before attempting sync
+                            sessionManager.ensureClientLoaded(inboxId).fold(
                                 onSuccess = {
-                                    Log.d(TAG, "Periodic sync completed for inbox: $inboxId")
+                                    conversationRepository.syncConversations(inboxId).fold(
+                                        onSuccess = {
+                                            Log.d(TAG, "Periodic sync completed for inbox: $inboxId")
+
+                                            // Sync messages for each conversation to ensure we have content to display
+                                            viewModelScope.launch {
+                                                try {
+                                                    val conversations = conversationRepository.getConversations(inboxId).first()
+                                                    for (conversation in conversations) {
+                                                        val result = messageRepository.syncMessages(inboxId, conversation.id)
+                                                        result.fold(
+                                                            onSuccess = {
+                                                                Log.d(TAG, "Synced messages for conversation: ${conversation.name ?: conversation.id}")
+                                                                // Ensure message streaming is active for real-time updates
+                                                                messageRepository.startMessageStreaming(inboxId, conversation.id)
+                                                            },
+                                                            onFailure = { error ->
+                                                                Log.w(TAG, "Failed to sync messages for conversation: ${conversation.id}", error)
+                                                            }
+                                                        )
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Error syncing messages during periodic sync", e)
+                                                }
+                                            }
+                                        },
+                                        onFailure = { error ->
+                                            Log.e(TAG, "Periodic sync failed for inbox: $inboxId", error)
+                                        }
+                                    )
                                 },
                                 onFailure = { error ->
-                                    Log.e(TAG, "Periodic sync failed for inbox: $inboxId", error)
+                                    Log.e(TAG, "Failed to load client for inbox during periodic sync: $inboxId", error)
                                 }
                             )
                         }
