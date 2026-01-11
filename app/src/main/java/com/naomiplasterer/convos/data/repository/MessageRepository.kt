@@ -106,17 +106,98 @@ class MessageRepository @Inject constructor(
 
                     contentType.contains("group_updated", ignoreCase = true) ||
                             contentType.contains("groupUpdated", ignoreCase = true) -> {
-                        // Format group update as user-friendly message
-                        val content = try {
-                            // Get raw bytes instead of String to avoid UTF-8 corruption
-                            val rawBytes = decodedMessage.content<ByteArray>() ?: byteArrayOf()
+                        // Process profile updates but check if we should display the message
+                        try {
+                            // Get raw bytes from encoded content (same approach as streaming)
+                            val rawBytes = decodedMessage.encodedContent.content.toByteArray()
                             processGroupUpdateProfiles(conversationId, rawBytes)
-                            formatGroupUpdate(String(rawBytes, Charsets.UTF_8))
+
+                            val rawContent = String(rawBytes, Charsets.UTF_8)
+                            Log.d(TAG, "🔍 Group update raw content: ${rawContent.take(500)}")
+
+                            // Check if this is ONLY a profile update (not a group property change)
+                            // Profile updates won't have "name", "description", or "image_url" fields for the GROUP
+                            // They only have "app_data" with profile information
+                            val hasAppData = rawContent.contains("app_data", ignoreCase = true)
+                            val hasGroupName = rawContent.contains("\"name\":", ignoreCase = false) ||
+                                    rawContent.contains("group_name", ignoreCase = true)
+                            val hasGroupDesc = rawContent.contains("\"description\":", ignoreCase = false) ||
+                                    rawContent.contains("group_description", ignoreCase = true)
+                            val hasGroupImage = rawContent.contains("\"image_url\":", ignoreCase = false) ||
+                                    rawContent.contains("group_image", ignoreCase = true)
+
+                            Log.d(TAG, "🔍 Update detection - hasAppData: $hasAppData, hasGroupName: $hasGroupName, hasGroupDesc: $hasGroupDesc, hasGroupImage: $hasGroupImage")
+
+                            val isProfileOnlyUpdate = hasAppData && !hasGroupName && !hasGroupDesc && !hasGroupImage
+
+                            if (isProfileOnlyUpdate) {
+                                Log.d(TAG, "⏭️  SKIPPING profile-only update message from display")
+                                return@mapNotNull null // Skip this message, don't display it
+                            }
+
+                            // Reload member profiles after processing update to get the latest names
+                            var updatedMemberProfiles = try {
+                                memberProfileDao.getProfilesForConversation(conversationId)
+                                    .associate { it.inboxId to it.name }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to reload member profiles", e)
+                                memberProfiles // Use the old map as fallback
+                            }
+
+                            // If we don't have the sender's profile, try loading from group metadata
+                            if (!updatedMemberProfiles.containsKey(decodedMessage.senderInboxId) &&
+                                conversation is org.xmtp.android.library.Conversation.Group) {
+                                try {
+                                    Log.d(TAG, "🔍 Sender profile not found in DB, checking group metadata...")
+                                    val conversationGroup = org.xmtp.android.library.Conversation.Group(conversation.group)
+                                    val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+
+                                    if (metadata != null && metadata.profilesCount > 0) {
+                                        Log.d(TAG, "   Found ${metadata.profilesCount} profiles in group metadata")
+                                        // Extract profiles and add to our map
+                                        val metadataProfiles = metadata.profilesList.associate { profile ->
+                                            val inboxIdHex = profile.inboxId.toByteArray()
+                                                .joinToString("") { String.format("%02x", it) }
+                                            val name = if (profile.hasName()) profile.name else null
+                                            inboxIdHex to name
+                                        }.filterValues { it != null } as Map<String, String>
+
+                                        updatedMemberProfiles = updatedMemberProfiles + metadataProfiles
+                                        Log.d(TAG, "   Added ${metadataProfiles.size} profiles from metadata")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "   Failed to load profiles from group metadata", e)
+                                }
+                            }
+
+                            // Debug: Log all available profiles
+                            Log.d(TAG, "🔍 Available member profiles: ${updatedMemberProfiles.entries.joinToString { "(${it.key.take(8)} -> ${it.value})" }}")
+                            Log.d(TAG, "🔍 Looking for senderInboxId: ${decodedMessage.senderInboxId.take(8)}...")
+
+                            // Get the sender's name from updated member profiles
+                            val senderName = updatedMemberProfiles[decodedMessage.senderInboxId] ?: "Somebody"
+                            Log.d(TAG, "👤 Sender name for group update: $senderName (inboxId: ${decodedMessage.senderInboxId.take(8)})")
+
+                            // Get the current group name to include in the message
+                            val currentGroupName = if (conversation is org.xmtp.android.library.Conversation.Group) {
+                                try {
+                                    val name = conversation.group.name(); Log.d(TAG, "   Got group name: $name"); name
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "   Failed to get group name: ${e.message}")
+                                    null
+                                }
+                            } else {
+                                Log.d(TAG, "   Not a group conversation")
+                                null
+                            }
+
+                            val content = formatGroupUpdate(rawContent, senderName, currentGroupName)
+                            Log.d(TAG, "   Formatted update message: $content")
+                            "update" to content
                         } catch (e: Exception) {
-                            Log.w(TAG, "  Failed to decode group update: ${e.message}")
-                            "Group settings were updated"
+                            Log.e(TAG, "  Failed to decode group update: ${e.message}", e)
+                            "update" to "Group settings were updated"
                         }
-                        "update" to content
                     }
 
                     else -> {
@@ -158,15 +239,32 @@ class MessageRepository @Inject constructor(
 
             messageDao.insertAll(entities)
 
-            // Update conversation's lastMessageAt if we have messages
-            if (entities.isNotEmpty()) {
-                val latestMessageTime = entities.maxOfOrNull { it.sentAt }
+            // Update conversation's lastMessageAt based on non-update messages only (matching iOS behavior)
+            val nonUpdateMessages = entities.filter { it.contentType != "update" }
+            if (nonUpdateMessages.isNotEmpty()) {
+                val latestMessageTime = nonUpdateMessages.maxOfOrNull { it.sentAt }
                 if (latestMessageTime != null) {
-                    conversationDao.updateLastMessageTime(conversationId, latestMessageTime)
-                    Log.d(
-                        TAG,
-                        "Updated lastMessageAt for conversation $conversationId to $latestMessageTime"
-                    )
+                    // Get existing conversation to preserve other fields
+                    val existingConversation = conversationDao.getConversationSync(conversationId)
+                    if (existingConversation != null) {
+                        // Update the conversation with new lastMessageAt
+                        // This forces Room to emit a new value with the updated message preview
+                        conversationDao.update(existingConversation.copy(
+                            lastMessageAt = latestMessageTime
+                        ))
+                        Log.d(
+                            TAG,
+                            "Updated conversation $conversationId with lastMessageAt: $latestMessageTime"
+                        )
+                    }
+                }
+            } else {
+                // Even if there are no non-update messages, force a refresh to ensure UI gets the latest state
+                val existingConversation = conversationDao.getConversationSync(conversationId)
+                if (existingConversation != null) {
+                    // Touch the conversation to force Room to re-evaluate the query
+                    conversationDao.update(existingConversation)
+                    Log.d(TAG, "Forced conversation refresh for $conversationId to update message preview")
                 }
             }
 
@@ -190,14 +288,28 @@ class MessageRepository @Inject constructor(
             val conversation = client.conversations.findConversation(conversationId)
                 ?: return Result.failure(IllegalStateException("Conversation not found: $conversationId"))
 
+            // Update lastMessageAt immediately for better UX
+            // This ensures the conversation moves to the top right away
+            val currentTime = System.currentTimeMillis()
+
+            // Get existing conversation to preserve other fields
+            val existingConversation = conversationDao.getConversationSync(conversationId)
+            if (existingConversation != null) {
+                // Update the entire conversation entity
+                conversationDao.update(existingConversation.copy(
+                    lastMessageAt = currentTime
+                ))
+                Log.d(TAG, "Optimistically updated conversation $conversationId with lastMessageAt: $currentTime")
+            }
+
             // Send the message via XMTP
             val messageId = conversation.send(text)
+            Log.d(TAG, "Sent message via XMTP: $messageId")
 
-            // Sync to get the sent message from the network
-            // The message will appear via the stream, but we sync to ensure it's in the DB
-            syncMessages(inboxId, conversationId)
+            // The message will arrive via the stream, no need to sync
+            // Syncing was causing duplicate messages
 
-            Log.d(TAG, "Sent message: $messageId")
+            Log.d(TAG, "Message send complete: $messageId")
             Result.success(messageId)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send message", e)
@@ -284,19 +396,99 @@ class MessageRepository @Inject constructor(
                             contentType.contains("group_updated", ignoreCase = true) ||
                                     contentType.contains("groupUpdated", ignoreCase = true) -> {
                                 Log.d(TAG, "🔄 DETECTED GROUP_UPDATED MESSAGE!")
-                                // Format group update as user-friendly message
-                                val content = try {
+                                // Process profile updates but check if we should display the message
+                                try {
                                     // Get the raw encoded content bytes
                                     val rawBytes =
                                         decodedMessage.encodedContent.content.toByteArray()
                                     Log.d(TAG, "   Processing group update profiles...")
                                     processGroupUpdateProfiles(conversationId, rawBytes)
-                                    formatGroupUpdate(String(rawBytes, Charsets.UTF_8))
+
+                                    val rawContent = String(rawBytes, Charsets.UTF_8)
+                                    Log.d(TAG, "🔍 Group update raw content: ${rawContent.take(500)}")
+
+                                    // Check if this is ONLY a profile update (not a group property change)
+                                    // Profile updates won't have "name", "description", or "image_url" fields for the GROUP
+                                    // They only have "app_data" with profile information
+                                    val hasAppData = rawContent.contains("app_data", ignoreCase = true)
+                                    val hasGroupName = rawContent.contains("\"name\":", ignoreCase = false) ||
+                                            rawContent.contains("group_name", ignoreCase = true)
+                                    val hasGroupDesc = rawContent.contains("\"description\":", ignoreCase = false) ||
+                                            rawContent.contains("group_description", ignoreCase = true)
+                                    val hasGroupImage = rawContent.contains("\"image_url\":", ignoreCase = false) ||
+                                            rawContent.contains("group_image", ignoreCase = true)
+
+                                    Log.d(TAG, "🔍 Update detection - hasAppData: $hasAppData, hasGroupName: $hasGroupName, hasGroupDesc: $hasGroupDesc, hasGroupImage: $hasGroupImage")
+
+                                    val isProfileOnlyUpdate = hasAppData && !hasGroupName && !hasGroupDesc && !hasGroupImage
+
+                                    if (isProfileOnlyUpdate) {
+                                        Log.d(TAG, "⏭️  SKIPPING profile-only update message from display")
+                                        return@collect // Skip this message, don't display it
+                                    }
+
+                                    // Reload member profiles after processing update to get the latest names
+                                    var updatedMemberProfiles = try {
+                                        memberProfileDao.getProfilesForConversation(conversationId)
+                                            .associate { it.inboxId to it.name }
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Failed to reload member profiles", e)
+                                        memberProfiles // Use the old map as fallback
+                                    }
+
+                                    // If we don't have the sender's profile, try loading from group metadata
+                                    if (!updatedMemberProfiles.containsKey(decodedMessage.senderInboxId) &&
+                                        conversation is org.xmtp.android.library.Conversation.Group) {
+                                        try {
+                                            Log.d(TAG, "🔍 Sender profile not found in DB, checking group metadata...")
+                                            val conversationGroup = org.xmtp.android.library.Conversation.Group(conversation.group)
+                                            val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+
+                                            if (metadata != null && metadata.profilesCount > 0) {
+                                                Log.d(TAG, "   Found ${metadata.profilesCount} profiles in group metadata")
+                                                // Extract profiles and add to our map
+                                                val metadataProfiles = metadata.profilesList.associate { profile ->
+                                                    val inboxIdHex = profile.inboxId.toByteArray()
+                                                        .joinToString("") { String.format("%02x", it) }
+                                                    val name = if (profile.hasName()) profile.name else null
+                                                    inboxIdHex to name
+                                                }.filterValues { it != null } as Map<String, String>
+
+                                                updatedMemberProfiles = updatedMemberProfiles + metadataProfiles
+                                                Log.d(TAG, "   Added ${metadataProfiles.size} profiles from metadata")
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "   Failed to load profiles from group metadata", e)
+                                        }
+                                    }
+
+                                    // Debug: Log all available profiles
+                                    Log.d(TAG, "🔍 Available member profiles: ${updatedMemberProfiles.entries.joinToString { "(${it.key.take(8)} -> ${it.value})" }}")
+                                    Log.d(TAG, "🔍 Looking for senderInboxId: ${decodedMessage.senderInboxId.take(8)}...")
+
+                                    val senderName = updatedMemberProfiles[decodedMessage.senderInboxId] ?: "Somebody"
+                                    Log.d(TAG, "👤 Sender name for group update: $senderName (inboxId: ${decodedMessage.senderInboxId.take(8)})")
+
+                                    // Get the current group name to include in the message
+                                    val currentGroupName = if (conversation is org.xmtp.android.library.Conversation.Group) {
+                                        try {
+                                            val name = conversation.group.name(); Log.d(TAG, "   Got group name: $name"); name
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "   Failed to get group name: ${e.message}")
+                                            null
+                                        }
+                                    } else {
+                                        Log.d(TAG, "   Not a group conversation")
+                                        null
+                                    }
+
+                                    val content = formatGroupUpdate(rawContent, senderName, currentGroupName)
+                                    Log.d(TAG, "   Formatted update message: $content")
+                                    "update" to content
                                 } catch (e: Exception) {
                                     Log.w(TAG, "  Failed to decode group update: ${e.message}", e)
-                                    "Group settings were updated"
+                                    "update" to "Group settings were updated"
                                 }
-                                "update" to content
                             }
 
                             else -> {
@@ -349,12 +541,24 @@ class MessageRepository @Inject constructor(
                         Log.d(TAG, "   Sender: ${entity.senderInboxId}")
                         Log.d(TAG, "   Type: ${entity.contentType}")
 
-                        // Update conversation's lastMessageAt
-                        conversationDao.updateLastMessageTime(conversationId, entity.sentAt)
-                        Log.d(
-                            TAG,
-                            "📅 Updated lastMessageAt for conversation $conversationId to ${entity.sentAt}"
-                        )
+                        // Only update lastMessageAt for non-update messages (matching iOS behavior)
+                        if (entity.contentType != "update") {
+                            // Get existing conversation to preserve other fields
+                            val existingConversation = conversationDao.getConversationSync(conversationId)
+                            if (existingConversation != null) {
+                                // Update the entire conversation entity with new lastMessageAt
+                                // This ensures Room's Flow emits a new value with the updated message preview
+                                conversationDao.update(existingConversation.copy(
+                                    lastMessageAt = entity.sentAt
+                                ))
+                                Log.d(
+                                    TAG,
+                                    "📅 Updated conversation $conversationId with lastMessageAt: ${entity.sentAt} for real-time UI update"
+                                )
+                            }
+                        } else {
+                            Log.d(TAG, "⏭️ Skipping lastMessageAt update for 'update' message")
+                        }
                         Log.d(TAG, "========================================")
                         Log.d(TAG, "")
                     }
@@ -573,7 +777,7 @@ class MessageRepository @Inject constructor(
      * Formats group update messages from raw content to user-friendly text.
      * Handles metadata changes like name, description, image updates.
      */
-    private fun formatGroupUpdate(rawContent: String): String {
+    private fun formatGroupUpdate(rawContent: String, senderName: String, currentGroupName: String?): String {
         return try {
             // Check if this is iOS app_data format
             if (rawContent.contains("app_data:", ignoreCase = true)) {
@@ -598,19 +802,25 @@ class MessageRepository @Inject constructor(
                                 rawContent.contains(
                                     "name",
                                     ignoreCase = true
-                                ) -> "Group name was updated"
+                                ) -> {
+                                    if (!currentGroupName.isNullOrBlank()) {
+                                        "$senderName changed the name of the group to $currentGroupName"
+                                    } else {
+                                        "$senderName updated the group name"
+                                    }
+                                }
 
                                 rawContent.contains(
                                     "description",
                                     ignoreCase = true
-                                ) -> "Group description was updated"
+                                ) -> "$senderName updated the group description"
 
                                 rawContent.contains(
                                     "image",
                                     ignoreCase = true
-                                ) -> "Group photo was updated"
+                                ) -> "$senderName updated the group photo"
 
-                                else -> "Group settings were updated"
+                                else -> "$senderName updated the group settings"
                             }
                         }
                     } catch (e: Exception) {
@@ -620,14 +830,20 @@ class MessageRepository @Inject constructor(
 
                 // If we couldn't decode, try to infer from the message
                 return when {
-                    rawContent.contains("name", ignoreCase = true) -> "Group name was updated"
+                    rawContent.contains("name", ignoreCase = true) -> {
+                        if (!currentGroupName.isNullOrBlank()) {
+                            "$senderName changed the name of the group to $currentGroupName"
+                        } else {
+                            "$senderName updated the group name"
+                        }
+                    }
                     rawContent.contains(
                         "description",
                         ignoreCase = true
-                    ) -> "Group description was updated"
+                    ) -> "$senderName updated the group description"
 
-                    rawContent.contains("image", ignoreCase = true) -> "Group photo was updated"
-                    else -> "Group settings were updated"
+                    rawContent.contains("image", ignoreCase = true) -> "$senderName updated the group photo"
+                    else -> "$senderName updated the group settings"
                 }
             }
 
@@ -636,20 +852,25 @@ class MessageRepository @Inject constructor(
                 // Check for group name update
                 rawContent.contains("group_name", ignoreCase = true) ||
                         rawContent.contains("name", ignoreCase = true) -> {
-                    // Try to extract the new name from the content
-                    val nameRegex =
-                        """(?:name[:\s=]+["']?)([^"',\}]+)""".toRegex(RegexOption.IGNORE_CASE)
-                    val match = nameRegex.find(rawContent)
-                    val newName = match?.groupValues?.getOrNull(1)?.trim()
-
-                    if (!newName.isNullOrEmpty() && !newName.contains(
-                            "app_data",
-                            ignoreCase = true
-                        )
-                    ) {
-                        "Group name was changed to \"$newName\""
+                    // Use the current group name if available, otherwise try to extract from content
+                    if (!currentGroupName.isNullOrBlank()) {
+                        "$senderName changed the name of the group to $currentGroupName"
                     } else {
-                        "Group name was changed"
+                        // Try to extract the new name from the content
+                        val nameRegex =
+                            """(?:name[:\s=]+["']?)([^"',\}]+)""".toRegex(RegexOption.IGNORE_CASE)
+                        val match = nameRegex.find(rawContent)
+                        val newName = match?.groupValues?.getOrNull(1)?.trim()
+
+                        if (!newName.isNullOrEmpty() && !newName.contains(
+                                "app_data",
+                                ignoreCase = true
+                            )
+                        ) {
+                            "$senderName changed the name of the group to $newName"
+                        } else {
+                            "$senderName changed the group name"
+                        }
                     }
                 }
 
@@ -657,18 +878,18 @@ class MessageRepository @Inject constructor(
                 rawContent.contains("group_image", ignoreCase = true) ||
                         rawContent.contains("image", ignoreCase = true) ||
                         rawContent.contains("photo", ignoreCase = true) -> {
-                    "Group photo was changed"
+                    "$senderName changed the group photo"
                 }
 
                 // Check for description update
                 rawContent.contains("description", ignoreCase = true) -> {
-                    "Group description was updated"
+                    "$senderName updated the group description"
                 }
 
                 // Fallback for any other group update
                 else -> {
                     Log.d(TAG, "Unknown group update format: $rawContent")
-                    "Group settings were updated"
+                    "$senderName updated the group settings"
                 }
             }
         } catch (e: Exception) {

@@ -23,7 +23,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -58,6 +60,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.naomiplasterer.convos.domain.model.Conversation
@@ -84,6 +89,8 @@ fun ConversationScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showEditInfoDialog by remember { mutableStateOf(false) }
+    var showMyInfoDialog by remember { mutableStateOf(false) }
 
     // Helper to check if conversation should show delete prompt (only 1 member)
     val shouldPromptDelete = remember(uiState) {
@@ -131,10 +138,19 @@ fun ConversationScreen(
                 is ConversationUiState.Success -> {
                     TopAppBar(
                         title = {
-                            Text(
-                                text = state.conversation.name ?: "Untitled",
-                                style = MaterialTheme.typography.titleMedium
-                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.step2x),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                ConversationImageAvatar(
+                                    imageUrl = state.conversation.imageUrl,
+                                    conversationName = state.conversation.name
+                                )
+                                Text(
+                                    text = state.conversation.name ?: "Untitled",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
                         },
                         navigationIcon = {
                             IconButton(onClick = handleBackPress) {
@@ -153,6 +169,27 @@ fun ConversationScreen(
                                     expanded = showMenu,
                                     onDismissRequest = { showMenu = false }
                                 ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Edit Convo") },
+                                        onClick = {
+                                            showMenu = false
+                                            viewModel.startEditingInfo()
+                                            showEditInfoDialog = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Edit, contentDescription = null)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("My Info") },
+                                        onClick = {
+                                            showMenu = false
+                                            showMyInfoDialog = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Person, contentDescription = null)
+                                        }
+                                    )
                                     DropdownMenuItem(
                                         text = { Text("Share Invite") },
                                         onClick = {
@@ -286,6 +323,26 @@ fun ConversationScreen(
             }
         )
     }
+
+    if (showEditInfoDialog) {
+        ConversationInfoEditDialog(
+            viewModel = viewModel,
+            onDismiss = { showEditInfoDialog = false }
+        )
+    }
+
+    if (showMyInfoDialog) {
+        when (val state = uiState) {
+            is ConversationUiState.Success -> {
+                MyInfoDialog(
+                    conversationId = state.conversation.id,
+                    inboxId = state.conversation.inboxId,
+                    onDismiss = { showMyInfoDialog = false }
+                )
+            }
+            else -> {}
+        }
+    }
 }
 
 @Composable
@@ -299,6 +356,8 @@ private fun ConversationContent(
     isSending: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val focusManager = LocalFocusManager.current
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -317,7 +376,15 @@ private fun ConversationContent(
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            // Dismiss keyboard when tapping on message list
+                            focusManager.clearFocus()
+                        }
+                    )
+                },
             state = listState,
             reverseLayout = true,
             contentPadding = PaddingValues(horizontal = Spacing.step4x, vertical = Spacing.step2x)
@@ -332,30 +399,37 @@ private fun ConversationContent(
                 val previousMessage = messages.getOrNull(index - 1)
                 val nextMessage = messages.getOrNull(index + 1)
 
-                // Determine if this is the start of a message group (Android grouping logic)
-                val isGroupStart = previousMessage == null ||
+                // With reverseLayout=true:
+                // - index 0 = newest (bottom of screen)
+                // - previousMessage (index-1) = visually BELOW (newer)
+                // - nextMessage (index+1) = visually ABOVE (older)
+
+                // isFirstInGroup = visually at BOTTOM of group (newest in group) - show avatar & timestamp
+                val isFirstInGroup = previousMessage == null ||
                         previousMessage.senderInboxId != message.senderInboxId ||
                         (message.sentAt - previousMessage.sentAt) > 5 * 60 * 1000 // 5 minutes
 
-                val isGroupEnd = nextMessage == null ||
+                // isLastInGroup = visually at TOP of group (oldest in group) - show name
+                val isLastInGroup = nextMessage == null ||
                         nextMessage.senderInboxId != message.senderInboxId ||
                         (nextMessage.sentAt - message.sentAt) > 5 * 60 * 1000 // 5 minutes
 
-                val senderName =
-                    conversation.members.find { it.inboxId == message.senderInboxId }?.displayName
-                        ?: "Somebody"
+                val sender = conversation.members.find { it.inboxId == message.senderInboxId }
+                val senderName = sender?.displayName ?: "Somebody"
+                val senderAvatarUrl = sender?.imageUrl
 
                 MessageBubble(
                     message = message,
                     isOwn = message.senderInboxId == currentInboxId,
-                    showAvatar = isGroupEnd && message.senderInboxId != currentInboxId,
-                    showSenderName = isGroupStart && message.senderInboxId != currentInboxId,
+                    showAvatar = isFirstInGroup && message.senderInboxId != currentInboxId,
+                    showSenderName = isLastInGroup && message.senderInboxId != currentInboxId,
+                    showTimestamp = isFirstInGroup,
                     senderName = senderName,
-                    senderAvatarUrl = null
+                    senderAvatarUrl = senderAvatarUrl
                 )
 
                 // Android-native spacing: tight within group, larger between groups
-                val spacerHeight = if (isGroupEnd) 12.dp else 2.dp
+                val spacerHeight = if (isLastInGroup) 12.dp else 2.dp
                 Spacer(modifier = Modifier.height(spacerHeight))
             }
         }
@@ -376,6 +450,7 @@ private fun MessageBubble(
     modifier: Modifier = Modifier,
     showAvatar: Boolean = false,
     showSenderName: Boolean = false,
+    showTimestamp: Boolean = true,
     senderName: String? = null,
     senderAvatarUrl: String? = null
 ) {
@@ -395,114 +470,119 @@ private fun MessageBubble(
         is MessageContent.Update -> content.details  // This case is handled above, but kept for completeness
     }
 
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
+    Column(
+        modifier = modifier.fillMaxWidth()
     ) {
-        // Avatar only shown for first message in group
-        if (!isOwn && showAvatar) {
-            MessageAvatar(
-                avatarUrl = senderAvatarUrl,
-                name = senderName ?: "U",
-                modifier = Modifier
-                    .padding(end = Spacing.step2x)
-                    .align(Alignment.Bottom)
+        // Sender name above message group (only for first message in group)
+        if (!isOwn && showSenderName && senderName != null) {
+            Text(
+                text = senderName,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                modifier = Modifier.padding(
+                    start = 32.dp + Spacing.step2x + Spacing.step2x, // Account for avatar width + padding
+                    bottom = Spacing.stepHalf
+                )
             )
-        } else if (!isOwn) {
-            // Spacer to maintain alignment for subsequent messages
-            Spacer(modifier = Modifier.width(32.dp + Spacing.step2x))
         }
 
         Column(
             horizontalAlignment = if (isOwn) Alignment.End else Alignment.Start,
-            modifier = Modifier.weight(1f, fill = false)
+            modifier = Modifier.fillMaxWidth()
         ) {
-            // Sender name only for first message in group
-            if (showSenderName && senderName != null) {
-                Text(
-                    text = senderName,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                    modifier = Modifier.padding(
-                        start = if (isOwn) 0.dp else Spacing.step2x,
-                        end = if (isOwn) Spacing.step2x else 0.dp,
-                        bottom = Spacing.stepHalf
-                    )
-                )
-            }
-
-            // Message bubble with Android-native rounded corners
-            Surface(
-                shape = RoundedCornerShape(
-                    topStart = 20.dp,
-                    topEnd = 20.dp,
-                    bottomStart = if (isOwn) 20.dp else 4.dp,
-                    bottomEnd = if (isOwn) 4.dp else 20.dp
-                ),
-                color = if (isOwn) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                },
-                modifier = Modifier
-                    .widthIn(max = 280.dp)
-            ) {
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (isOwn) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.padding(
-                        horizontal = 12.dp,
-                        vertical = 8.dp
-                    )
-                )
-            }
-
-            // Timestamp and status below bubble (Android pattern)
+            // Row for avatar + message bubble (not including timestamp)
             Row(
-                modifier = Modifier.padding(
-                    start = if (isOwn) 0.dp else Spacing.step2x,
-                    end = if (isOwn) Spacing.step2x else 0.dp,
-                    top = Spacing.stepHalf
-                ),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = formatMessageTime(message.sentAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
+                // Avatar shown beside last message in group (centered with message bubble only)
+                if (!isOwn && showAvatar) {
+                    MessageAvatar(
+                        avatarUrl = senderAvatarUrl,
+                        name = senderName ?: "U",
+                        modifier = Modifier.padding(end = Spacing.step2x)
+                    )
+                } else if (!isOwn) {
+                    // Spacer to maintain alignment for subsequent messages
+                    Spacer(modifier = Modifier.width(32.dp + Spacing.step2x))
+                }
 
-                // Status indicator for own messages
-                if (isOwn) {
-                    when (message.status) {
-                        MessageStatus.SENDING -> {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(10.dp),
-                                strokeWidth = 1.dp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                        }
+                // Message bubble with Android-native rounded corners
+                Surface(
+                    shape = RoundedCornerShape(
+                        topStart = 20.dp,
+                        topEnd = 20.dp,
+                        bottomStart = if (isOwn) 20.dp else 4.dp,
+                        bottomEnd = if (isOwn) 4.dp else 20.dp
+                    ),
+                    color = if (isOwn) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    modifier = Modifier
+                        .widthIn(max = 280.dp)
+                ) {
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (isOwn) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        modifier = Modifier.padding(
+                            horizontal = 12.dp,
+                            vertical = 8.dp
+                        )
+                    )
+                }
+            }
 
-                        MessageStatus.SENT, MessageStatus.DELIVERED -> {
-                            Text(
-                                text = "✓",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                        }
+            // Timestamp and status below bubble (Android pattern) - only on last message in group
+            if (showTimestamp) {
+                Row(
+                    modifier = Modifier.padding(
+                        start = if (isOwn) 0.dp else (32.dp + Spacing.step2x + Spacing.step2x), // Account for avatar + spacing
+                        end = if (isOwn) Spacing.step2x else 0.dp,
+                        top = Spacing.stepHalf
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = formatMessageTime(message.sentAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
 
-                        MessageStatus.FAILED -> {
-                            Text(
-                                text = "!",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                    // Status indicator for own messages
+                    if (isOwn) {
+                        when (message.status) {
+                            MessageStatus.SENDING -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(10.dp),
+                                    strokeWidth = 1.dp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+
+                            MessageStatus.SENT, MessageStatus.DELIVERED -> {
+                                Text(
+                                    text = "✓",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+
+                            MessageStatus.FAILED -> {
+                                Text(
+                                    text = "!",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }
@@ -610,7 +690,8 @@ private fun MessageAvatar(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.primaryContainer
     ) {
-        if (avatarUrl != null) {
+        // Show image if URL is valid, otherwise show initials
+        if (!avatarUrl.isNullOrBlank()) {
             AsyncImage(
                 model = avatarUrl,
                 contentDescription = "Avatar for $name",
@@ -620,13 +701,49 @@ private fun MessageAvatar(
                 contentScale = ContentScale.Crop
             )
         } else {
-            // Monogram fallback
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = name.take(1).uppercase(),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConversationImageAvatar(
+    imageUrl: String?,
+    conversationName: String?,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.size(32.dp),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        // Show image if URL is valid, otherwise show initials
+        if (!imageUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = imageUrl,
+                contentDescription = "Conversation image",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = (conversationName?.take(1) ?: "U").uppercase(),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onPrimaryContainer

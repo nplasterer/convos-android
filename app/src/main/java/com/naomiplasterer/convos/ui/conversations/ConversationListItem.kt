@@ -12,9 +12,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.ui.theme.ImageSizes
 import com.naomiplasterer.convos.ui.theme.Spacing
@@ -94,20 +96,21 @@ fun ConversationListItem(
                         horizontalArrangement = Arrangement.spacedBy(Spacing.stepX),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (conversation.lastMessageAt != null) {
-                            Text(
-                                text = formatTimestamp(conversation.lastMessageAt),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (conversation.isUnread) {
-                                    MaterialTheme.colorScheme.onSurface
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
+                        // Always show timestamp if we have a last message time or creation time
+                        val timestampToShow = conversation.lastMessageAt ?: conversation.createdAt
+                        Text(
+                            text = formatTimestamp(timestampToShow),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (conversation.isUnread) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
 
-                        if (conversation.lastMessagePreview != null) {
-                            Text(text = "•", style = MaterialTheme.typography.labelMedium)
+                        // Show last message preview if available
+                        if (!conversation.lastMessagePreview.isNullOrBlank()) {
+                            Text(text = " • ", style = MaterialTheme.typography.labelMedium)
                             Text(
                                 text = conversation.lastMessagePreview,
                                 style = MaterialTheme.typography.labelMedium,
@@ -116,6 +119,16 @@ fun ConversationListItem(
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            // Show empty state or placeholder
+                            Text(
+                                text = " • No messages yet",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
@@ -149,12 +162,23 @@ private fun ConversationAvatar(
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = Icons.Default.Group,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(24.dp)
-        )
+        if (!conversation.imageUrl.isNullOrBlank()) {
+            // Display the group image if available
+            AsyncImage(
+                model = conversation.imageUrl,
+                contentDescription = conversation.name ?: "Group avatar",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            // Fallback to default group icon
+            Icon(
+                imageVector = Icons.Default.Group,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(24.dp)
+            )
+        }
     }
 }
 

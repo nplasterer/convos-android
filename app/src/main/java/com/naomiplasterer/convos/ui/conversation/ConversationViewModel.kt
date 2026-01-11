@@ -54,6 +54,18 @@ class ConversationViewModel @Inject constructor(
     private val _isSending = MutableStateFlow(false)
     val isSending: StateFlow<Boolean> = _isSending.asStateFlow()
 
+    private val _isEditingInfo = MutableStateFlow(false)
+    val isEditingInfo: StateFlow<Boolean> = _isEditingInfo.asStateFlow()
+
+    private val _editingConversationName = MutableStateFlow("")
+    val editingConversationName: StateFlow<String> = _editingConversationName.asStateFlow()
+
+    private val _isSavingInfo = MutableStateFlow(false)
+    val isSavingInfo: StateFlow<Boolean> = _isSavingInfo.asStateFlow()
+
+    private val _saveInfoError = MutableStateFlow<String?>(null)
+    val saveInfoError: StateFlow<String?> = _saveInfoError.asStateFlow()
+
     // Cache members to prevent creating new objects on every Flow emission
     private var cachedMembers: List<com.naomiplasterer.convos.domain.model.Member> = emptyList()
     private var cachedMemberCount: Int = 0
@@ -240,8 +252,48 @@ class ConversationViewModel @Inject constructor(
 
             // Load member profiles from database
             Log.d(TAG, "👥 Loading member profiles for conversation: ${conversation.id}")
-            val profiles = memberProfileDao.getProfilesForConversation(conversation.id)
+            var profiles = memberProfileDao.getProfilesForConversation(conversation.id)
             Log.d(TAG, "   Found ${profiles.size} profiles in database")
+
+            // If we don't have profiles for all members, try loading from group metadata
+            if (profiles.size < xmtpMembers.size) {
+                Log.d(TAG, "   Missing profiles (have ${profiles.size}, need ${xmtpMembers.size}), checking group metadata...")
+                try {
+                    val conversationGroup = org.xmtp.android.library.Conversation.Group(group)
+                    val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+
+                    if (metadata != null && metadata.profilesCount > 0) {
+                        Log.d(TAG, "   Found ${metadata.profilesCount} profiles in group metadata")
+
+                        // Extract and save profiles from metadata
+                        for (metadataProfile in metadata.profilesList) {
+                            val inboxIdHex = metadataProfile.inboxId.toByteArray()
+                                .joinToString("") { String.format("%02x", it) }
+                            val name = if (metadataProfile.hasName()) metadataProfile.name else null
+                            val image = if (metadataProfile.hasImage()) metadataProfile.image else null
+
+                            Log.d(TAG, "   Profile from metadata: inboxId=${inboxIdHex.take(8)}, name=$name")
+
+                            // Save to database
+                            val profileEntity = com.naomiplasterer.convos.data.local.entity.MemberProfileEntity(
+                                conversationId = conversation.id,
+                                inboxId = inboxIdHex,
+                                name = name,
+                                avatar = image
+                            )
+                            memberProfileDao.insert(profileEntity)
+                        }
+
+                        // Reload profiles from database
+                        profiles = memberProfileDao.getProfilesForConversation(conversation.id)
+                        Log.d(TAG, "   After loading from metadata: ${profiles.size} profiles in database")
+                    } else {
+                        Log.d(TAG, "   No profiles found in group metadata")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "   Failed to load profiles from group metadata", e)
+                }
+            }
 
             for (profile in profiles) {
                 Log.d(
@@ -335,6 +387,9 @@ class ConversationViewModel @Inject constructor(
         val text = _messageText.value.trim()
         if (text.isEmpty() || _isSending.value) return
 
+        // Clear text immediately for instant UX feedback
+        _messageText.value = ""
+
         viewModelScope.launch {
             _isSending.value = true
 
@@ -349,6 +404,8 @@ class ConversationViewModel @Inject constructor(
             if (inboxId == null) {
                 Log.e(TAG, "Cannot send message: conversation not loaded")
                 _isSending.value = false
+                // Restore text on error
+                _messageText.value = text
                 return@launch
             }
 
@@ -359,12 +416,12 @@ class ConversationViewModel @Inject constructor(
             ).fold(
                 onSuccess = {
                     Log.d(TAG, "Message sent successfully")
-                    // Clear text after successful send (not immediately, to prevent keyboard dismissal)
-                    _messageText.value = ""
+                    // Text already cleared, nothing to do
                 },
                 onFailure = { error ->
                     Log.e(TAG, "Failed to send message", error)
-                    // Don't clear text on failure so user can retry
+                    // Restore text on failure so user can retry
+                    _messageText.value = text
                 }
             )
 
@@ -516,6 +573,74 @@ class ConversationViewModel @Inject constructor(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to generate invite code", e)
+            }
+        }
+    }
+
+    fun startEditingInfo() {
+        val currentState = _uiState.value
+        if (currentState is ConversationUiState.Success) {
+            _editingConversationName.value = currentState.conversation.name ?: ""
+            _isEditingInfo.value = true
+            _saveInfoError.value = null
+        }
+    }
+
+    fun updateEditingName(name: String) {
+        _editingConversationName.value = name
+    }
+
+    fun cancelEditingInfo() {
+        _isEditingInfo.value = false
+        _editingConversationName.value = ""
+        _saveInfoError.value = null
+    }
+
+    fun saveConversationInfo() {
+        val currentState = _uiState.value
+        if (currentState !is ConversationUiState.Success) {
+            Log.e(TAG, "Cannot save info: conversation not loaded")
+            return
+        }
+
+        val conversation = currentState.conversation
+        val trimmedName = _editingConversationName.value.trim()
+
+        val hasNameChanged = trimmedName != (conversation.name ?: "")
+
+        if (!hasNameChanged) {
+            cancelEditingInfo()
+            return
+        }
+
+        viewModelScope.launch {
+            _isSavingInfo.value = true
+            _saveInfoError.value = null
+
+            try {
+                Log.d(TAG, "Updating conversation name")
+                conversationRepository.updateConversationDetails(
+                    inboxId = conversation.inboxId,
+                    conversationId = conversationId,
+                    name = trimmedName.ifEmpty { null },
+                    description = null,
+                    imageUrl = null
+                ).fold(
+                    onSuccess = {
+                        Log.d(TAG, "Conversation name updated successfully")
+                        _isEditingInfo.value = false
+                    },
+                    onFailure = { error ->
+                        throw error
+                    }
+                )
+
+                Log.d(TAG, "Conversation info saved successfully")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save conversation info", e)
+                _saveInfoError.value = e.message ?: "Failed to save changes"
+            } finally {
+                _isSavingInfo.value = false
             }
         }
     }

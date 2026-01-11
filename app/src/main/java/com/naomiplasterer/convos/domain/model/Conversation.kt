@@ -35,8 +35,9 @@ enum class ConversationKind {
 }
 
 /**
- * Check if two conversations are meaningfully equal (ignoring timestamps and preview).
+ * Check if two conversations are meaningfully equal.
  * This is used to prevent unnecessary UI updates when only timestamps change.
+ * IMPORTANT: Includes lastMessagePreview to ensure UI updates when messages change.
  */
 fun Conversation.meaningfullyEquals(other: Conversation?): Boolean {
     if (other == null) return false
@@ -57,18 +58,32 @@ fun Conversation.meaningfullyEquals(other: Conversation?): Boolean {
             isMuted == other.isMuted &&
             isDraft == other.isDraft &&
             expiresAt == other.expiresAt &&
+            lastMessagePreview == other.lastMessagePreview &&  // Include to trigger UI updates when messages change
             members == other.members
-    // Intentionally excluded: createdAt, lastMessageAt, lastMessagePreview
+    // Intentionally excluded: createdAt, lastMessageAt (timestamps change frequently without meaningful impact)
 }
 
 /**
  * Check if two lists of conversations are meaningfully equal.
  * Used to prevent unnecessary UI updates in the conversations list.
+ *
+ * IMPORTANT: This checks both content AND order. If conversations change order
+ * (e.g., due to new messages), this will return false to trigger a UI update.
  */
 fun List<Conversation>.meaningfullyEquals(other: List<Conversation>?): Boolean {
     if (other == null) return false
     if (this.size != other.size) return false
 
+    // First check if the order is the same by comparing IDs in sequence
+    // This ensures we detect when conversations re-order due to new messages
+    for (i in indices) {
+        if (this[i].id != other[i].id) {
+            // Order has changed - this is a meaningful difference
+            return false
+        }
+    }
+
+    // Order is the same, now check if individual conversations have meaningful changes
     // Create maps by ID for efficient lookup
     val thisMap = this.associateBy { it.id }
     val otherMap = other.associateBy { it.id }
