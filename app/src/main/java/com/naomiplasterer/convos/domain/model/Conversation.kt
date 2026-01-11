@@ -64,11 +64,24 @@ fun Conversation.meaningfullyEquals(other: Conversation?): Boolean {
 /**
  * Check if two lists of conversations are meaningfully equal.
  * Used to prevent unnecessary UI updates in the conversations list.
+ *
+ * IMPORTANT: This checks both content AND order. If conversations change order
+ * (e.g., due to new messages), this will return false to trigger a UI update.
  */
 fun List<Conversation>.meaningfullyEquals(other: List<Conversation>?): Boolean {
     if (other == null) return false
     if (this.size != other.size) return false
 
+    // First check if the order is the same by comparing IDs in sequence
+    // This ensures we detect when conversations re-order due to new messages
+    for (i in indices) {
+        if (this[i].id != other[i].id) {
+            // Order has changed - this is a meaningful difference
+            return false
+        }
+    }
+
+    // Order is the same, now check if individual conversations have meaningful changes
     // Create maps by ID for efficient lookup
     val thisMap = this.associateBy { it.id }
     val otherMap = other.associateBy { it.id }

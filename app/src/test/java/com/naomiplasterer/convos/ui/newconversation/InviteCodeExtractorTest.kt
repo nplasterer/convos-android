@@ -210,4 +210,38 @@ class InviteCodeExtractorTest {
 
         assertEquals("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", result)
     }
+
+    @Test
+    fun `raw invite code with asterisk separators`() {
+        val qrCode = "a".repeat(300) + "*" + "b".repeat(300) + "*" + "c".repeat(100)
+        val result = extractInviteCode(qrCode)
+
+        assertEquals(qrCode, result)
+    }
+
+    @Test
+    fun `extract invite code from v2 URL with asterisk separators in code`() {
+        val longCode = "abcdef123456".repeat(30) + "*" + "xyz789".repeat(10)
+        val qrCode = "https://popup.convos.org/v2?i=$longCode"
+        val result = extractInviteCode(qrCode)
+
+        assertEquals(longCode, result)
+    }
+
+    @Test
+    fun `extract invite code from Android deep link with asterisk separators`() {
+        val longCode = "test_code-".repeat(40) + "*" + "more_data".repeat(20)
+        val qrCode = "convos://i/$longCode"
+        val result = extractInviteCode(qrCode)
+
+        assertEquals(longCode, result)
+    }
+
+    @Test
+    fun `raw base64url code with multiple asterisk separators`() {
+        val qrCode = "aGVsbG8td29ybGQ_test".repeat(20) + "*" + "123_ABC".repeat(15) + "*" + "final"
+        val result = extractInviteCode(qrCode)
+
+        assertEquals(qrCode, result)
+    }
 }

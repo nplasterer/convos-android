@@ -100,8 +100,25 @@ object InviteCompression {
                 return null
             }
 
+            // Try decompression with zlib wrapper first (default)
+            val result = tryDecompress(data, originalSize, nowrap = false)
+                ?: tryDecompress(data, originalSize, nowrap = true) // Try raw DEFLATE if that fails
+
+            if (result == null) {
+                Log.e(TAG, "Decompression failed with both zlib and raw DEFLATE")
+            }
+
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Decompression failed", e)
+            null
+        }
+    }
+
+    private fun tryDecompress(data: ByteArray, originalSize: Int, nowrap: Boolean): ByteArray? {
+        return try {
             // Decompress the data starting from byte 5
-            val inflater = Inflater()
+            val inflater = Inflater(nowrap)
             inflater.setInput(data, 5, data.size - 5)
 
             val result = ByteArray(originalSize)
@@ -109,16 +126,17 @@ object InviteCompression {
             inflater.end()
 
             if (decompressedSize != originalSize) {
-                Log.e(
+                Log.d(
                     TAG,
-                    "Decompressed size mismatch: expected $originalSize, got $decompressedSize"
+                    "Decompressed size mismatch (nowrap=$nowrap): expected $originalSize, got $decompressedSize"
                 )
                 return null
             }
 
+            Log.d(TAG, "Decompression successful with nowrap=$nowrap")
             result
         } catch (e: Exception) {
-            Log.e(TAG, "Decompression failed", e)
+            Log.d(TAG, "Decompression with nowrap=$nowrap failed: ${e.message}")
             null
         }
     }
