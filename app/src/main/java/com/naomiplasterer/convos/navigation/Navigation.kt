@@ -12,7 +12,6 @@ import com.naomiplasterer.convos.ui.conversations.ConversationsScreen
 import com.naomiplasterer.convos.ui.newconversation.NewConversationMode
 import com.naomiplasterer.convos.ui.newconversation.NewConversationScreen
 import com.naomiplasterer.convos.ui.profile.MyInfoScreen
-import com.naomiplasterer.convos.ui.settings.QuicknameSettingsScreen
 import com.naomiplasterer.convos.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
@@ -25,7 +24,6 @@ sealed class Screen(val route: String) {
     object MyInfo : Screen("my_info/{conversationId}/{inboxId}") {
         fun createRoute(conversationId: String, inboxId: String) = "my_info/$conversationId/$inboxId"
     }
-    object QuicknameSettings : Screen("quickname_settings")
 }
 
 @Composable
@@ -133,15 +131,6 @@ fun ConvosNavigation(
             MyInfoScreen(
                 conversationId = conversationId,
                 inboxId = inboxId,
-                onNavigateToQuicknameSettings = {
-                    navController.navigate(Screen.QuicknameSettings.route)
-                },
-                onBackClick = { navController.popBackStack() }
-            )
-        }
-
-        composable(Screen.QuicknameSettings.route) {
-            QuicknameSettingsScreen(
                 onBackClick = { navController.popBackStack() }
             )
         }

@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.naomiplasterer.convos.data.local.dao.MemberProfileDao
 import com.naomiplasterer.convos.data.repository.ProfileRepository
 import com.naomiplasterer.convos.data.repository.ProfileUpdateResult
-import com.naomiplasterer.convos.data.repository.QuicknameRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,9 +17,6 @@ private const val TAG = "MyInfoViewModel"
 
 data class MyInfoUiState(
     val conversationDisplayName: String? = null,
-    val quicknameDisplayName: String? = null,
-    val hasQuickname: Boolean = false,
-    val isApplyingQuickname: Boolean = false,
     val isSavingProfile: Boolean = false,
     val errorMessage: String? = null,
     val successMessage: String? = null,
@@ -31,7 +27,6 @@ data class MyInfoUiState(
 @HiltViewModel
 class MyInfoViewModel @Inject constructor(
     private val profileRepository: ProfileRepository,
-    private val quicknameRepository: QuicknameRepository,
     private val memberProfileDao: MemberProfileDao
 ) : ViewModel() {
 
@@ -47,7 +42,6 @@ class MyInfoViewModel @Inject constructor(
 
         viewModelScope.launch {
             loadConversationProfile(conversationId, inboxId)
-            loadQuicknameSettings()
         }
     }
 
@@ -61,18 +55,6 @@ class MyInfoViewModel @Inject constructor(
             Log.d(TAG, "Loaded conversation profile: ${profile?.name}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load conversation profile", e)
-        }
-    }
-
-    private fun loadQuicknameSettings() {
-        viewModelScope.launch {
-            quicknameRepository.quicknameSettings.collect { settings ->
-                _uiState.value = _uiState.value.copy(
-                    quicknameDisplayName = settings?.displayName,
-                    hasQuickname = settings != null
-                )
-                Log.d(TAG, "Loaded Quickname: ${settings?.displayName}, hasQuickname=${settings != null}")
-            }
         }
     }
 
@@ -140,65 +122,6 @@ class MyInfoViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(
                     isSavingProfile = false,
                     errorMessage = e.message ?: "Failed to save profile"
-                )
-            }
-        }
-    }
-
-    fun applyQuickname() {
-        val convId = conversationId
-        val inbox = inboxId
-        val quickname = _uiState.value.quicknameDisplayName
-
-        if (convId == null || inbox == null) {
-            _uiState.value = _uiState.value.copy(errorMessage = "Not initialized")
-            return
-        }
-
-        if (quickname.isNullOrBlank()) {
-            _uiState.value = _uiState.value.copy(errorMessage = "No Quickname set")
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isApplyingQuickname = true,
-                errorMessage = null,
-                successMessage = null
-            )
-
-            try {
-                Log.d(TAG, "Applying Quickname '$quickname' to conversation")
-
-                val result = profileRepository.applyQuicknameToConversation(
-                    conversationId = convId,
-                    inboxId = inbox,
-                    displayName = quickname
-                )
-
-                when (result) {
-                    is ProfileUpdateResult.Success -> {
-                        _uiState.value = _uiState.value.copy(
-                            conversationDisplayName = quickname,
-                            editingDisplayName = quickname,
-                            isApplyingQuickname = false,
-                            successMessage = "Quickname applied!"
-                        )
-                        Log.d(TAG, "Quickname applied successfully")
-                    }
-                    is ProfileUpdateResult.Error -> {
-                        _uiState.value = _uiState.value.copy(
-                            isApplyingQuickname = false,
-                            errorMessage = result.message
-                        )
-                        Log.e(TAG, "Failed to apply Quickname: ${result.message}")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error applying Quickname", e)
-                _uiState.value = _uiState.value.copy(
-                    isApplyingQuickname = false,
-                    errorMessage = e.message ?: "Failed to apply Quickname"
                 )
             }
         }

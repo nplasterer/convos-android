@@ -136,7 +136,7 @@ class MessageRepository @Inject constructor(
                             }
 
                             // Reload member profiles after processing update to get the latest names
-                            val updatedMemberProfiles = try {
+                            var updatedMemberProfiles = try {
                                 memberProfileDao.getProfilesForConversation(conversationId)
                                     .associate { it.inboxId to it.name }
                             } catch (e: Exception) {
@@ -144,9 +144,39 @@ class MessageRepository @Inject constructor(
                                 memberProfiles // Use the old map as fallback
                             }
 
+                            // If we don't have the sender's profile, try loading from group metadata
+                            if (!updatedMemberProfiles.containsKey(decodedMessage.senderInboxId) &&
+                                conversation is org.xmtp.android.library.Conversation.Group) {
+                                try {
+                                    Log.d(TAG, "🔍 Sender profile not found in DB, checking group metadata...")
+                                    val conversationGroup = org.xmtp.android.library.Conversation.Group(conversation.group)
+                                    val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+
+                                    if (metadata != null && metadata.profilesCount > 0) {
+                                        Log.d(TAG, "   Found ${metadata.profilesCount} profiles in group metadata")
+                                        // Extract profiles and add to our map
+                                        val metadataProfiles = metadata.profilesList.associate { profile ->
+                                            val inboxIdHex = profile.inboxId.toByteArray()
+                                                .joinToString("") { String.format("%02x", it) }
+                                            val name = if (profile.hasName()) profile.name else null
+                                            inboxIdHex to name
+                                        }.filterValues { it != null } as Map<String, String>
+
+                                        updatedMemberProfiles = updatedMemberProfiles + metadataProfiles
+                                        Log.d(TAG, "   Added ${metadataProfiles.size} profiles from metadata")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "   Failed to load profiles from group metadata", e)
+                                }
+                            }
+
+                            // Debug: Log all available profiles
+                            Log.d(TAG, "🔍 Available member profiles: ${updatedMemberProfiles.entries.joinToString { "(${it.key.take(8)} -> ${it.value})" }}")
+                            Log.d(TAG, "🔍 Looking for senderInboxId: ${decodedMessage.senderInboxId.take(8)}...")
+
                             // Get the sender's name from updated member profiles
-                            val senderName = updatedMemberProfiles[decodedMessage.senderInboxId] ?: "Someone"
-                            Log.d(TAG, "👤 Sender name for group update: $senderName (inboxId: ${decodedMessage.senderInboxId})")
+                            val senderName = updatedMemberProfiles[decodedMessage.senderInboxId] ?: "Somebody"
+                            Log.d(TAG, "👤 Sender name for group update: $senderName (inboxId: ${decodedMessage.senderInboxId.take(8)})")
 
                             // Get the current group name to include in the message
                             val currentGroupName = if (conversation is org.xmtp.android.library.Conversation.Group) {
@@ -250,7 +280,7 @@ class MessageRepository @Inject constructor(
             val conversation = client.conversations.findConversation(conversationId)
                 ?: return Result.failure(IllegalStateException("Conversation not found: $conversationId"))
 
-            // Optimistically update lastMessageAt immediately for better UX
+            // Update lastMessageAt immediately for better UX
             // This ensures the conversation moves to the top right away
             val currentTime = System.currentTimeMillis()
             conversationDao.updateLastMessageTime(conversationId, currentTime)
@@ -258,13 +288,12 @@ class MessageRepository @Inject constructor(
 
             // Send the message via XMTP
             val messageId = conversation.send(text)
+            Log.d(TAG, "Sent message via XMTP: $messageId")
 
-            // Sync to get the sent message from the network
-            // The message will appear via the stream, but we sync to ensure it's in the DB
-            // This will update lastMessageAt again with the actual server timestamp
-            syncMessages(inboxId, conversationId)
+            // The message will arrive via the stream, no need to sync
+            // Syncing was causing duplicate messages
 
-            Log.d(TAG, "Sent message: $messageId")
+            Log.d(TAG, "Message send complete: $messageId")
             Result.success(messageId)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send message", e)
@@ -383,7 +412,7 @@ class MessageRepository @Inject constructor(
                                     }
 
                                     // Reload member profiles after processing update to get the latest names
-                                    val updatedMemberProfiles = try {
+                                    var updatedMemberProfiles = try {
                                         memberProfileDao.getProfilesForConversation(conversationId)
                                             .associate { it.inboxId to it.name }
                                     } catch (e: Exception) {
@@ -391,8 +420,38 @@ class MessageRepository @Inject constructor(
                                         memberProfiles // Use the old map as fallback
                                     }
 
+                                    // If we don't have the sender's profile, try loading from group metadata
+                                    if (!updatedMemberProfiles.containsKey(decodedMessage.senderInboxId) &&
+                                        conversation is org.xmtp.android.library.Conversation.Group) {
+                                        try {
+                                            Log.d(TAG, "🔍 Sender profile not found in DB, checking group metadata...")
+                                            val conversationGroup = org.xmtp.android.library.Conversation.Group(conversation.group)
+                                            val metadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(conversationGroup)
+
+                                            if (metadata != null && metadata.profilesCount > 0) {
+                                                Log.d(TAG, "   Found ${metadata.profilesCount} profiles in group metadata")
+                                                // Extract profiles and add to our map
+                                                val metadataProfiles = metadata.profilesList.associate { profile ->
+                                                    val inboxIdHex = profile.inboxId.toByteArray()
+                                                        .joinToString("") { String.format("%02x", it) }
+                                                    val name = if (profile.hasName()) profile.name else null
+                                                    inboxIdHex to name
+                                                }.filterValues { it != null } as Map<String, String>
+
+                                                updatedMemberProfiles = updatedMemberProfiles + metadataProfiles
+                                                Log.d(TAG, "   Added ${metadataProfiles.size} profiles from metadata")
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "   Failed to load profiles from group metadata", e)
+                                        }
+                                    }
+
+                                    // Debug: Log all available profiles
+                                    Log.d(TAG, "🔍 Available member profiles: ${updatedMemberProfiles.entries.joinToString { "(${it.key.take(8)} -> ${it.value})" }}")
+                                    Log.d(TAG, "🔍 Looking for senderInboxId: ${decodedMessage.senderInboxId.take(8)}...")
+
                                     val senderName = updatedMemberProfiles[decodedMessage.senderInboxId] ?: "Somebody"
-                                    Log.d(TAG, "👤 Sender name for group update: $senderName (inboxId: ${decodedMessage.senderInboxId})")
+                                    Log.d(TAG, "👤 Sender name for group update: $senderName (inboxId: ${decodedMessage.senderInboxId.take(8)})")
 
                                     // Get the current group name to include in the message
                                     val currentGroupName = if (conversation is org.xmtp.android.library.Conversation.Group) {

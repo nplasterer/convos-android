@@ -387,6 +387,9 @@ class ConversationViewModel @Inject constructor(
         val text = _messageText.value.trim()
         if (text.isEmpty() || _isSending.value) return
 
+        // Clear text immediately for instant UX feedback
+        _messageText.value = ""
+
         viewModelScope.launch {
             _isSending.value = true
 
@@ -401,6 +404,8 @@ class ConversationViewModel @Inject constructor(
             if (inboxId == null) {
                 Log.e(TAG, "Cannot send message: conversation not loaded")
                 _isSending.value = false
+                // Restore text on error
+                _messageText.value = text
                 return@launch
             }
 
@@ -411,12 +416,12 @@ class ConversationViewModel @Inject constructor(
             ).fold(
                 onSuccess = {
                     Log.d(TAG, "Message sent successfully")
-                    // Clear text after successful send (not immediately, to prevent keyboard dismissal)
-                    _messageText.value = ""
+                    // Text already cleared, nothing to do
                 },
                 onFailure = { error ->
                     Log.e(TAG, "Failed to send message", error)
-                    // Don't clear text on failure so user can retry
+                    // Restore text on failure so user can retry
+                    _messageText.value = text
                 }
             )
 

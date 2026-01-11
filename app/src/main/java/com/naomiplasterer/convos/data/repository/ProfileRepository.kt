@@ -64,32 +64,6 @@ class ProfileRepository @Inject constructor(
         }
     }
 
-    suspend fun applyQuicknameToConversation(
-        conversationId: String,
-        inboxId: String,
-        displayName: String?
-    ): ProfileUpdateResult {
-        return try {
-            Log.d(TAG, "Applying Quickname to conversation: $conversationId")
-
-            if (displayName.isNullOrBlank()) {
-                return ProfileUpdateResult.Error("Display name cannot be empty")
-            }
-
-            val result = updateDisplayName(conversationId, inboxId, displayName)
-
-            if (result is ProfileUpdateResult.Success) {
-                Log.d(TAG, "Successfully applied Quickname to conversation")
-            }
-
-            result
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to apply Quickname to conversation", e)
-            ProfileUpdateResult.Error(e.message ?: "Failed to apply Quickname")
-        }
-    }
-
     private suspend fun updateGroupMetadata(
         conversationId: String,
         inboxId: String,

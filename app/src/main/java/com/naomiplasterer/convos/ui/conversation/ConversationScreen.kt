@@ -60,6 +60,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.naomiplasterer.convos.domain.model.Conversation
@@ -353,6 +356,8 @@ private fun ConversationContent(
     isSending: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val focusManager = LocalFocusManager.current
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -371,7 +376,15 @@ private fun ConversationContent(
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            // Dismiss keyboard when tapping on message list
+                            focusManager.clearFocus()
+                        }
+                    )
+                },
             state = listState,
             reverseLayout = true,
             contentPadding = PaddingValues(horizontal = Spacing.step4x, vertical = Spacing.step2x)

@@ -50,7 +50,6 @@ fun MyInfoScreen(
     conversationId: String,
     inboxId: String,
     viewModel: MyInfoViewModel = hiltViewModel(),
-    onNavigateToQuicknameSettings: () -> Unit = {},
     onBackClick: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -125,16 +124,6 @@ fun MyInfoScreen(
                 displayName = uiState.conversationDisplayName,
                 onEditClick = { showEditDialog = true }
             )
-
-            Spacer(modifier = Modifier.height(Spacing.step2x))
-
-            QuicknameSection(
-                quicknameDisplayName = uiState.quicknameDisplayName,
-                hasQuickname = uiState.hasQuickname,
-                isApplying = uiState.isApplyingQuickname,
-                onUseQuickname = { viewModel.applyQuickname() },
-                onEditQuickname = onNavigateToQuicknameSettings
-            )
         }
     }
 
@@ -193,98 +182,6 @@ private fun ConversationProfileSection(
                 text = displayName?.ifBlank { "Somebody" } ?: "Somebody",
                 style = MaterialTheme.typography.bodyLarge
             )
-        }
-    }
-}
-
-@Composable
-private fun QuicknameSection(
-    quicknameDisplayName: String?,
-    hasQuickname: Boolean,
-    isApplying: Boolean,
-    onUseQuickname: () -> Unit,
-    onEditQuickname: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Spacing.step3x)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "Quickname",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "Add this name quickly in new convos",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(Spacing.step3x))
-
-            if (hasQuickname && quicknameDisplayName != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = quicknameDisplayName,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    OutlinedButton(
-                        onClick = onUseQuickname,
-                        enabled = !isApplying
-                    ) {
-                        if (isApplying) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Text("Use")
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(Spacing.step2x))
-
-                TextButton(
-                    onClick = onEditQuickname,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Edit Quickname")
-                }
-            } else {
-                Text(
-                    text = "No Quickname set",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(Spacing.step2x))
-
-                Button(
-                    onClick = onEditQuickname,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Set Up Quickname")
-                }
-            }
         }
     }
 }

@@ -12,9 +12,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.ui.theme.ImageSizes
 import com.naomiplasterer.convos.ui.theme.Spacing
@@ -160,12 +162,23 @@ private fun ConversationAvatar(
             .background(MaterialTheme.colorScheme.primaryContainer),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = Icons.Default.Group,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-            modifier = Modifier.size(24.dp)
-        )
+        if (!conversation.imageUrl.isNullOrBlank()) {
+            // Display the group image if available
+            AsyncImage(
+                model = conversation.imageUrl,
+                contentDescription = conversation.name ?: "Group avatar",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            // Fallback to default group icon
+            Icon(
+                imageVector = Icons.Default.Group,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.size(24.dp)
+            )
+        }
     }
 }
 
