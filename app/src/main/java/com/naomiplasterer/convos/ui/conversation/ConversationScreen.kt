@@ -29,10 +29,13 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,7 +56,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.text.KeyboardOptions
@@ -65,6 +71,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import coil.compose.AsyncImage
+import com.naomiplasterer.convos.R
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.domain.model.Message
 import com.naomiplasterer.convos.domain.model.MessageContent
@@ -85,12 +92,16 @@ fun ConversationScreen(
     val uiState by viewModel.uiState.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
+    val explodeState by viewModel.explodeState.collectAsState()
+    val showExplodeInfo by viewModel.showExplodeInfo.collectAsState()
+    val remainingTime by viewModel.remainingTime.collectAsState()
 
     var showMenu by remember { mutableStateOf(false) }
     var showShareDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showEditInfoDialog by remember { mutableStateOf(false) }
     var showMyInfoDialog by remember { mutableStateOf(false) }
+    var showExplodeDialog by remember { mutableStateOf(false) }
 
     // Helper to check if conversation should show delete prompt (only 1 member)
     val shouldPromptDelete = remember(uiState) {
@@ -200,17 +211,28 @@ fun ConversationScreen(
                                             Icon(Icons.Default.Share, contentDescription = null)
                                         }
                                     )
-                                    if (state.conversation.members.size <= 1) {
+                                    // Show explode option only for group creator
+                                    if (state.conversation.creatorInboxId == state.conversation.inboxId &&
+                                        state.conversation.expiresAt == null) {
+                                        HorizontalDivider()
                                         DropdownMenuItem(
-                                            text = { Text("Delete Conversation") },
+                                            text = {
+                                                Text(
+                                                    "Explode Conversation",
+                                                    color = Color(0xFFFF6B35)
+                                                )
+                                            },
                                             onClick = {
                                                 showMenu = false
-                                                viewModel.deleteConversation()
-                                                onBackClick()
+                                                showExplodeDialog = true
                                             },
-                                            colors = MenuDefaults.itemColors(
-                                                textColor = MaterialTheme.colorScheme.error
-                                            )
+                                            leadingIcon = {
+                                                Icon(
+                                                    imageVector = ImageVector.vectorResource(R.drawable.ic_explode),
+                                                    contentDescription = null,
+                                                    tint = Color(0xFFFF6B35)
+                                                )
+                                            }
                                         )
                                     }
                                 }
@@ -256,6 +278,7 @@ fun ConversationScreen(
                     onMessageTextChange = viewModel::updateMessageText,
                     onSendClick = viewModel::sendMessage,
                     isSending = isSending,
+                    remainingTime = remainingTime,
                     modifier = Modifier.padding(paddingValues)
                 )
             }
@@ -343,6 +366,41 @@ fun ConversationScreen(
             else -> {}
         }
     }
+
+    if (showExplodeInfo) {
+        ExplodeInfoBottomSheet(
+            onDismiss = { viewModel.hideExplodeInfoSheet() }
+        )
+    }
+
+    if (showExplodeDialog) {
+        ExplodeDialog(
+            explodeState = explodeState,
+            onExplode = {
+                viewModel.explodeConversation(
+                    onSuccess = {
+                        showExplodeDialog = false
+                        onBackClick()
+                    }
+                )
+            },
+            onDismiss = {
+                showExplodeDialog = false
+            },
+            onInfoClick = {
+                showExplodeDialog = false
+                viewModel.showExplodeInfoSheet()
+            }
+        )
+
+        // Auto-close dialog after successful explosion
+        LaunchedEffect(explodeState) {
+            if (explodeState == ExplodeState.EXPLODED) {
+                kotlinx.coroutines.delay(2000) // Show success message for 2 seconds
+                showExplodeDialog = false
+            }
+        }
+    }
 }
 
 @Composable
@@ -354,6 +412,7 @@ private fun ConversationContent(
     onMessageTextChange: (String) -> Unit,
     onSendClick: () -> Unit,
     isSending: Boolean,
+    remainingTime: String?,
     modifier: Modifier = Modifier
 ) {
     val focusManager = LocalFocusManager.current
@@ -431,6 +490,38 @@ private fun ConversationContent(
                 // Android-native spacing: tight within group, larger between groups
                 val spacerHeight = if (isLastInGroup) 12.dp else 2.dp
                 Spacer(modifier = Modifier.height(spacerHeight))
+            }
+        }
+
+        // Show countdown timer if conversation is set to explode
+        if (conversation.expiresAt != null && conversation.expiresAt > System.currentTimeMillis()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "This conversation will explode in:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        text = remainingTime ?: "Soon",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 
@@ -876,7 +967,8 @@ private fun PreviewConversationContent() {
             messageText = "",
             onMessageTextChange = {},
             onSendClick = {},
-            isSending = false
+            isSending = false,
+            remainingTime = null
         )
     }
 }

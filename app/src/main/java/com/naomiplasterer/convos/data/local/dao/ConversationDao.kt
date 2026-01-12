@@ -103,6 +103,15 @@ interface ConversationDao {
     @Query("UPDATE conversations SET lastMessageAt = :timestamp WHERE id = :conversationId")
     suspend fun updateLastMessageTime(conversationId: String, timestamp: Long)
 
+    @Query("UPDATE conversations SET expiresAt = :expiresAt WHERE id = :conversationId")
+    suspend fun updateExpirationTime(conversationId: String, expiresAt: Long)
+
+    @Query("SELECT * FROM conversations WHERE expiresAt IS NOT NULL AND expiresAt <= :currentTimeMillis")
+    suspend fun getExpiredConversations(currentTimeMillis: Long = System.currentTimeMillis()): List<ConversationEntity>
+
+    @Query("DELETE FROM conversations WHERE id = :conversationId")
+    suspend fun deleteConversation(conversationId: String)
+
     @Query("DELETE FROM conversations WHERE inboxId = :inboxId")
     suspend fun deleteAllForInbox(inboxId: String)
 }

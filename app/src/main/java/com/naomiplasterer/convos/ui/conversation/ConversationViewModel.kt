@@ -15,6 +15,7 @@ import com.naomiplasterer.convos.domain.model.MessageContent
 import com.naomiplasterer.convos.domain.model.meaningfullyEquals
 import com.naomiplasterer.convos.proto.ConversationMetadataProtos
 import com.naomiplasterer.convos.codecs.ExplodeSettingsCodec
+import com.naomiplasterer.convos.codecs.ExplodeSettings
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,9 +24,11 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import android.util.Log
 import org.xmtp.android.library.Client
 import java.util.UUID
+import java.util.Date
 import javax.inject.Inject
 
 private const val TAG = "ConversationViewModel"
@@ -66,6 +69,16 @@ class ConversationViewModel @Inject constructor(
     private val _saveInfoError = MutableStateFlow<String?>(null)
     val saveInfoError: StateFlow<String?> = _saveInfoError.asStateFlow()
 
+    // Explode feature state
+    private val _explodeState = MutableStateFlow(ExplodeState.READY)
+    val explodeState: StateFlow<ExplodeState> = _explodeState.asStateFlow()
+
+    private val _showExplodeInfo = MutableStateFlow(false)
+    val showExplodeInfo: StateFlow<Boolean> = _showExplodeInfo.asStateFlow()
+
+    private val _remainingTime = MutableStateFlow<String?>(null)
+    val remainingTime: StateFlow<String?> = _remainingTime.asStateFlow()
+
     // Cache members to prevent creating new objects on every Flow emission
     private var cachedMembers: List<com.naomiplasterer.convos.domain.model.Member> = emptyList()
     private var cachedMemberCount: Int = 0
@@ -78,19 +91,10 @@ class ConversationViewModel @Inject constructor(
     private var pendingMessages: List<Message> = emptyList()
 
     init {
-        // Register the ExplodeSettings codec
-        try {
-            Client.register(ExplodeSettingsCodec())
-        } catch (e: Exception) {
-            // Codec might already be registered, that's ok
-            Log.d(
-                TAG,
-                "ExplodeSettings codec already registered or registration failed: ${e.message}"
-            )
-        }
         loadConversation()
         loadMessages()
         syncAndStartStreaming()
+        startExpirationCheck()
     }
 
     private fun syncAndStartStreaming() {
@@ -177,62 +181,74 @@ class ConversationViewModel @Inject constructor(
 
     private fun updateUiStateWithConversation(conversation: Conversation) {
         viewModelScope.launch {
-            // If incoming conversation has no members, preserve cached members for comparison
-            val conversationForComparison = if (conversation.members.isEmpty() && cachedConversation != null) {
-                conversation.copy(members = cachedConversation!!.members)
-            } else {
-                conversation
-            }
+            // Check if this is the first load (transitioning from Loading to Success)
+            val currentState = _uiState.value
+            val isFirstLoad = currentState !is ConversationUiState.Success
 
-            // Determine which conversation object to use in UI state
+            // Determine if we need to load/refresh members
             val now = System.currentTimeMillis()
             val memberRefreshInterval = 10_000L // Reload members every 10 seconds
             val shouldRefreshMembers = (now - lastMemberLoadTime) > memberRefreshInterval
 
-            val conversationWithMembers = if (cachedConversation != null && conversationForComparison.meaningfullyEquals(cachedConversation) && !shouldRefreshMembers) {
-                // Conversation hasn't meaningfully changed and members were recently loaded
-                // Reuse the EXACT same cached object to prevent unnecessary recomposition
-                Log.d(TAG, "Conversation hasn't meaningfully changed, reusing cached conversation object")
-                cachedConversation!! // Use the exact same reference
-            } else {
-                // Conversation has changed OR members need refresh - determine if we need to reload members
-                val updated = if (conversationForComparison.members.isNotEmpty() &&
-                                  conversationForComparison.members.size != cachedMemberCount) {
-                    // Member count changed, reload
-                    Log.d(TAG, "Member count changed (${cachedMemberCount} → ${conversationForComparison.members.size}), reloading members...")
-                    loadConversationMembers(conversation)
-                } else if (cachedMembers.isEmpty() || shouldRefreshMembers) {
-                    // First load OR time to refresh
-                    if (shouldRefreshMembers) {
-                        Log.d(TAG, "Refreshing members (last load was ${(now - lastMemberLoadTime) / 1000}s ago)...")
-                    } else {
-                        Log.d(TAG, "First load, fetching members...")
-                    }
-                    loadConversationMembers(conversation)
-                } else {
-                    // Reuse cached members
-                    Log.d(TAG, "Reusing cached members (count: ${cachedMembers.size})")
-                    conversation.copy(members = cachedMembers)
+            val conversationWithMembers = when {
+                // First load - ALWAYS load members to ensure names are available
+                isFirstLoad -> {
+                    Log.d(TAG, "First load - loading members before transitioning to Success state")
+                    val loadedConversation = loadConversationMembers(conversation)
+                    cachedConversation = loadedConversation
+                    loadedConversation
                 }
 
-                // Cache the full conversation
-                cachedConversation = updated
-                updated
+                // Check if cached conversation can be reused
+                cachedConversation != null && conversation.meaningfullyEquals(cachedConversation) && !shouldRefreshMembers -> {
+                    Log.d(TAG, "Conversation hasn't meaningfully changed, reusing cached conversation object")
+                    cachedConversation!! // Use the exact same reference
+                }
+
+                // Member count changed
+                conversation.members.isNotEmpty() && conversation.members.size != cachedMemberCount -> {
+                    Log.d(TAG, "Member count changed (${cachedMemberCount} → ${conversation.members.size}), reloading members...")
+                    val loadedConversation = loadConversationMembers(conversation)
+                    cachedConversation = loadedConversation
+                    loadedConversation
+                }
+
+                // Time to refresh members
+                shouldRefreshMembers -> {
+                    Log.d(TAG, "Refreshing members (last load was ${(now - lastMemberLoadTime) / 1000}s ago)...")
+                    val loadedConversation = loadConversationMembers(conversation)
+                    cachedConversation = loadedConversation
+                    loadedConversation
+                }
+
+                // Reuse cached members if available
+                cachedMembers.isNotEmpty() -> {
+                    Log.d(TAG, "Reusing cached members (count: ${cachedMembers.size})")
+                    val updated = conversation.copy(members = cachedMembers)
+                    cachedConversation = updated
+                    updated
+                }
+
+                // Fallback - load members
+                else -> {
+                    Log.d(TAG, "No cached members, loading...")
+                    val loadedConversation = loadConversationMembers(conversation)
+                    cachedConversation = loadedConversation
+                    loadedConversation
+                }
             }
 
             // Only update UI state if the conversation object is different from what's currently in the state
-            // This prevents creating new UI state objects when nothing has changed
-            val currentState = _uiState.value
             if (currentState is ConversationUiState.Success && currentState.conversation === conversationWithMembers) {
                 // Same conversation object reference - don't update to avoid triggering recomposition
                 Log.d(TAG, "UI state already has this conversation object, skipping update")
                 return@launch
             }
 
+            // Update the UI state
             _uiState.value = when (currentState) {
                 is ConversationUiState.Success -> currentState.copy(conversation = conversationWithMembers)
                 else -> {
-                    // Transitioning from Loading to Success - apply pending messages if any
                     Log.d(TAG, "Transitioning to Success state with ${pendingMessages.size} pending messages")
                     ConversationUiState.Success(
                         conversation = conversationWithMembers,
@@ -245,6 +261,15 @@ class ConversationViewModel @Inject constructor(
 
     private suspend fun loadConversationMembers(conversation: Conversation): Conversation {
         return try {
+            // Ensure client is loaded first
+            sessionManager.ensureClientLoaded(conversation.inboxId).fold(
+                onFailure = { error ->
+                    Log.e(TAG, "Failed to ensure client loaded for loading members", error)
+                    return conversation
+                },
+                onSuccess = { /* client loaded successfully */ }
+            )
+
             val client = xmtpClientManager.getClient(conversation.inboxId) ?: return conversation
 
             val group = client.conversations.findGroup(conversation.id) ?: return conversation
@@ -381,6 +406,192 @@ class ConversationViewModel @Inject constructor(
 
     fun updateMessageText(text: String) {
         _messageText.value = text
+    }
+
+    fun showExplodeInfoSheet() {
+        _showExplodeInfo.value = true
+    }
+
+    fun hideExplodeInfoSheet() {
+        _showExplodeInfo.value = false
+    }
+
+    /**
+     * Initiates the explode process for the conversation.
+     * This will send an ExplodeSettings message to all participants
+     * and set an expiration time for the conversation.
+     */
+    fun explodeConversation(onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            try {
+                _explodeState.value = ExplodeState.EXPLODING
+
+                // Set expiration to 30 seconds from now
+                val expiresAt = Date(System.currentTimeMillis() + 30_000)
+
+                // Send explode settings to all participants
+                val success = sendExplodeSettings(expiresAt)
+
+                if (success) {
+                    // Update local conversation with expiration time
+                    updateConversationExpiration(expiresAt.time)
+
+                    // Start countdown timer
+                    startExpirationCountdown(expiresAt.time)
+
+                    _explodeState.value = ExplodeState.EXPLODED
+
+                    // Wait for animation, then navigate back
+                    delay(2000)
+                    _explodeState.value = ExplodeState.READY
+
+                    // Navigate back to conversation list
+                    onSuccess()
+                } else {
+                    _explodeState.value = ExplodeState.ERROR
+                    delay(2000)
+                    _explodeState.value = ExplodeState.READY
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to explode conversation", e)
+                _explodeState.value = ExplodeState.ERROR
+                delay(2000)
+                _explodeState.value = ExplodeState.READY
+            }
+        }
+    }
+
+    /**
+     * Sends ExplodeSettings message to all conversation participants
+     */
+    private suspend fun sendExplodeSettings(expiresAt: Date): Boolean {
+        return try {
+            val currentState = _uiState.value
+            if (currentState !is ConversationUiState.Success) {
+                Log.e(TAG, "Cannot send explode settings: conversation not loaded")
+                return false
+            }
+
+            val conversation = currentState.conversation
+
+            // Ensure the client is loaded for this inbox
+            val clientResult = sessionManager.ensureClientLoaded(conversation.inboxId)
+            if (clientResult.isFailure) {
+                Log.e(TAG, "Cannot send explode settings: failed to ensure client for inbox ${conversation.inboxId}")
+                return false
+            }
+
+            val client = xmtpClientManager.getClient(conversation.inboxId)
+            if (client == null) {
+                Log.e(TAG, "Cannot send explode settings: no XMTP client for inbox ${conversation.inboxId}")
+                return false
+            }
+
+            val xmtpConversation = client.conversations.list().find {
+                it.topic == conversation.topic
+            }
+
+            if (xmtpConversation == null) {
+                Log.e(TAG, "Cannot find XMTP conversation with topic ${conversation.topic}")
+                return false
+            }
+
+            // Send the explode settings message
+            val explodeSettings = ExplodeSettings(expiresAt = expiresAt)
+            val codec = ExplodeSettingsCodec()
+
+            // Encode the content using the codec
+            val encodedContent = codec.encode(explodeSettings)
+
+            // Send the encoded content
+            xmtpConversation.send(encodedContent = encodedContent)
+
+            // Update group metadata with expiration time (for cross-platform sync)
+            if (xmtpConversation is org.xmtp.android.library.Conversation.Group) {
+                try {
+                    val group = org.xmtp.android.library.Conversation.Group(xmtpConversation.group)
+
+                    // Retrieve existing metadata to preserve tag and profiles
+                    val existingMetadata = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.retrieveMetadata(group)
+
+                    // Create updated metadata with expiration time
+                    val expiresAtUnix = expiresAt.time / 1000
+                    Log.d(TAG, "[EXPIRATION DEBUG] Building metadata with expiresAtUnix=$expiresAtUnix (from ${expiresAt.time} ms)")
+
+                    val updatedMetadata = if (existingMetadata != null) {
+                        Log.d(TAG, "[EXPIRATION DEBUG] Updating existing metadata (tag=${existingMetadata.tag})")
+                        existingMetadata.toBuilder()
+                            .setExpiresAtUnix(expiresAtUnix) // Convert to Unix timestamp in seconds
+                            .build()
+                    } else {
+                        Log.d(TAG, "[EXPIRATION DEBUG] Generating new metadata")
+                        com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.generateMetadata(
+                            expiresAtUnix = expiresAtUnix
+                        )
+                    }
+
+                    Log.d(TAG, "[EXPIRATION DEBUG] Built metadata: hasExpiresAtUnix=${updatedMetadata.hasExpiresAtUnix()}, value=${if (updatedMetadata.hasExpiresAtUnix()) updatedMetadata.expiresAtUnix else "null"}")
+
+                    // Store the updated metadata
+                    val storeResult = com.naomiplasterer.convos.data.metadata.ConversationMetadataHelper.storeMetadata(group, updatedMetadata)
+                    if (storeResult.isFailure) {
+                        Log.w(TAG, "Failed to update group metadata with expiration", storeResult.exceptionOrNull())
+                    } else {
+                        Log.d(TAG, "Successfully updated group metadata with expiresAtUnix: $expiresAtUnix")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error updating group metadata", e)
+                }
+            }
+
+            Log.d(TAG, "Successfully sent explode settings with expiration: $expiresAt")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send explode settings", e)
+            false
+        }
+    }
+
+    /**
+     * Updates the local conversation with expiration time
+     */
+    private suspend fun updateConversationExpiration(expiresAtMillis: Long) {
+        try {
+            Log.d(TAG, "[EXPIRATION DEBUG] Updating conversation expiration: conversationId=$conversationId, expiresAt=$expiresAtMillis")
+            conversationRepository.updateExpirationTime(conversationId, expiresAtMillis)
+            Log.d(TAG, "[EXPIRATION DEBUG] Successfully updated conversation expiration")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update conversation expiration", e)
+        }
+    }
+
+    /**
+     * Starts a countdown timer for the conversation expiration
+     */
+    private fun startExpirationCountdown(expiresAtMillis: Long) {
+        viewModelScope.launch {
+            while (true) {
+                val now = System.currentTimeMillis()
+                val remaining = expiresAtMillis - now
+
+                if (remaining <= 0) {
+                    _remainingTime.value = "Exploding..."
+                    break
+                }
+
+                val seconds = remaining / 1000
+                val minutes = seconds / 60
+                val hours = minutes / 60
+
+                _remainingTime.value = when {
+                    hours > 0 -> "${hours}h ${minutes % 60}m"
+                    minutes > 0 -> "${minutes}m ${seconds % 60}s"
+                    else -> "${seconds}s"
+                }
+
+                delay(1000) // Update every second
+            }
+        }
     }
 
     fun sendMessage() {
@@ -641,6 +852,65 @@ class ConversationViewModel @Inject constructor(
                 _saveInfoError.value = e.message ?: "Failed to save changes"
             } finally {
                 _isSavingInfo.value = false
+            }
+        }
+    }
+
+    /**
+     * Check if the conversation has expired with adaptive timing for battery efficiency.
+     * - Sleeps until 5 seconds before expiration, then checks every second for accuracy
+     * - Skips checks entirely if no expiration is set
+     */
+    private fun startExpirationCheck() {
+        viewModelScope.launch {
+            while (true) {
+                // Get current conversation state
+                val currentState = _uiState.value
+                if (currentState is ConversationUiState.Success) {
+                    val conversation = currentState.conversation
+                    val expiresAt = conversation.expiresAt
+
+                    if (expiresAt == null) {
+                        // No expiration set - check infrequently for battery savings
+                        delay(30_000) // Check every 30 seconds in case expiration gets added
+                        continue
+                    }
+
+                    val now = System.currentTimeMillis()
+                    val timeUntilExpiration = expiresAt - now
+
+                    when {
+                        timeUntilExpiration <= 0 -> {
+                            // Expired! Clean up and exit
+                            Log.d(TAG, "🔥 Conversation has expired, deleting it immediately...")
+                            try {
+                                conversationRepository.cleanupExpiredConversations()
+                                Log.d(TAG, "✅ Expired conversation cleaned up successfully")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "❌ Failed to cleanup expired conversation", e)
+                            }
+                            break
+                        }
+                        timeUntilExpiration < 5_000 -> {
+                            // Less than 5 seconds until expiration - check every second for accuracy
+                            Log.d(TAG, "[EXPIRATION] Conversation expires in ${timeUntilExpiration/1000}s, checking every second")
+                            delay(1_000)
+                        }
+                        timeUntilExpiration < 60_000 -> {
+                            // Less than 60 seconds - check every 5 seconds
+                            delay(5_000)
+                        }
+                        else -> {
+                            // More than 60 seconds away - sleep until 60 seconds before expiration
+                            val sleepTime = timeUntilExpiration - 60_000
+                            Log.d(TAG, "[EXPIRATION] Conversation expires in ${timeUntilExpiration/1000}s, sleeping for ${sleepTime/1000}s")
+                            delay(sleepTime)
+                        }
+                    }
+                } else {
+                    // Conversation not loaded yet, check again in a moment
+                    delay(5_000)
+                }
             }
         }
     }

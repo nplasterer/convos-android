@@ -16,10 +16,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
 import coil.compose.AsyncImage
 import com.naomiplasterer.convos.domain.model.Conversation
 import com.naomiplasterer.convos.ui.theme.ImageSizes
 import com.naomiplasterer.convos.ui.theme.Spacing
+import com.naomiplasterer.convos.R
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -74,7 +78,10 @@ fun ConversationListItem(
                 horizontalArrangement = Arrangement.spacedBy(Spacing.step3x),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ConversationAvatar(conversation = conversation)
+                ConversationAvatar(
+                    conversation = conversation,
+                    isExploding = conversation.expiresAt != null && conversation.expiresAt > System.currentTimeMillis()
+                )
 
                 Column(
                     modifier = Modifier.weight(1f),
@@ -153,31 +160,58 @@ fun ConversationListItem(
 @Composable
 private fun ConversationAvatar(
     conversation: Conversation,
+    isExploding: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Box(
-        modifier = modifier
-            .size(ImageSizes.mediumAvatar)
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primaryContainer),
+        modifier = modifier.size(ImageSizes.mediumAvatar),
         contentAlignment = Alignment.Center
     ) {
-        if (!conversation.imageUrl.isNullOrBlank()) {
-            // Display the group image if available
-            AsyncImage(
-                model = conversation.imageUrl,
-                contentDescription = conversation.name ?: "Group avatar",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            // Fallback to default group icon
-            Icon(
-                imageVector = Icons.Default.Group,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(24.dp)
-            )
+        // Main avatar
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!conversation.imageUrl.isNullOrBlank()) {
+                // Display the group image if available
+                AsyncImage(
+                    model = conversation.imageUrl,
+                    contentDescription = conversation.name ?: "Group avatar",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                // Fallback to default group icon
+                Icon(
+                    imageVector = Icons.Default.Group,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+
+        // Explode indicator badge
+        if (isExploding) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFF6B35)) // Orange color
+                    .padding(3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = ImageVector.vectorResource(R.drawable.ic_explode),
+                    contentDescription = "Exploding conversation",
+                    tint = Color.White,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }

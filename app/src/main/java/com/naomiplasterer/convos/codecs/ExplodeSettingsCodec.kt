@@ -1,20 +1,24 @@
 package com.naomiplasterer.convos.codecs
 
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
 import com.google.gson.JsonSyntaxException
-import com.google.gson.annotations.SerializedName
 import com.google.protobuf.kotlin.toByteString
 import org.xmtp.android.library.codecs.ContentCodec
 import org.xmtp.android.library.codecs.ContentTypeIdBuilder
 import org.xmtp.android.library.codecs.EncodedContent
+import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * ExplodeSettings represents the settings for an exploding conversation.
  * This content type is sent to signal that a conversation should be deleted.
+ *
+ * IMPORTANT: Field names must match iOS exactly (camelCase) for cross-platform compatibility.
  */
 data class ExplodeSettings(
-    @SerializedName("expires_at")
     val expiresAt: Date
 )
 
@@ -37,7 +41,14 @@ val ContentTypeExplodeSettings = ContentTypeIdBuilder.builderFromAuthorityId(
 class ExplodeSettingsCodec : ContentCodec<ExplodeSettings> {
     override val contentType = ContentTypeExplodeSettings
 
-    private val gson = Gson()
+    // ISO8601 date format to match iOS implementation
+    private val iso8601Format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+        timeZone = TimeZone.getTimeZone("UTC")
+    }
+
+    private val gson = GsonBuilder()
+        .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        .create()
 
     override fun encode(content: ExplodeSettings): EncodedContent {
         return EncodedContent.newBuilder().also {

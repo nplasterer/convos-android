@@ -224,10 +224,113 @@ class ConversationRepository @Inject constructor(
                             entity.description?.take(50)
                         }', imageUrl='${entity.imageUrl}', expiresAt=$expiresAt"
                     )
+                    Log.d(TAG, "  [EXPIRATION DEBUG] After setting from metadata: entity.expiresAt=${entity.expiresAt}")
+                }
+
+                // Fetch last readable message using XMTP SDK
+                // This populates the last message preview without requiring a full message sync
+                var lastMessageTime: Long? = null
+                var lastReadableMessage: com.naomiplasterer.convos.data.local.entity.MessageEntity? = null
+                try {
+                    // Fetch recent messages to find the first readable one
+                    val recentMessages = when (conversation) {
+                        is XMTPConversation.Group -> conversation.group.messages(limit = 20) // Fetch more to find readable ones
+                        is XMTPConversation.Dm -> conversation.dm.messages(limit = 20)
+                        else -> emptyList()
+                    }
+
+                    Log.d(TAG, "Fetched ${recentMessages.size} recent messages for conversation ${conversation.id}")
+
+                    // Find the first readable message (skip system messages)
+                    val skipTypes = listOf(
+                        "explode_settings",
+                        "membership_change",
+                        "group_updated",
+                        "update",
+                        "reaction",
+                        "reply"
+                    )
+
+                    for (message in recentMessages) {
+                        val sentAtMs = message.sentAtNs / 1_000_000
+
+                        // Check content type
+                        val contentType = try {
+                            message.encodedContent.type.typeId
+                        } catch (e: Exception) {
+                            "text"
+                        }
+
+                        // Skip non-readable messages
+                        val shouldSkip = skipTypes.any { contentType.contains(it, ignoreCase = true) }
+                        if (shouldSkip) {
+                            Log.d(TAG, "Skipping message type: $contentType")
+                            continue
+                        }
+
+                        // Try to decode message content
+                        val messageContent = try {
+                            message.content<String>() ?: ""
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to decode message content (type: $contentType)", e)
+                            continue // Try next message
+                        }
+
+                        // Skip if it looks like an invite code or is empty
+                        if (messageContent.isBlank() || looksLikeInviteCode(messageContent)) {
+                            Log.d(TAG, "Skipping empty or invite code message")
+                            continue
+                        }
+
+                        // Found a readable message! This will be our last message
+                        lastMessageTime = sentAtMs
+                        lastReadableMessage = com.naomiplasterer.convos.data.local.entity.MessageEntity(
+                            id = message.id,
+                            conversationId = conversation.id,
+                            senderInboxId = message.senderInboxId,
+                            contentType = "text",
+                            content = messageContent,
+                            status = "sent",
+                            sentAt = sentAtMs,
+                            deliveredAt = null
+                        )
+
+                        Log.d(
+                            TAG,
+                            "Found last readable message for conversation ${conversation.id}: '${messageContent.take(30)}...' at $sentAtMs"
+                        )
+                        break // Stop after finding first readable message
+                    }
+
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to fetch last message for conversation ${conversation.id}", e)
+                    // Continue with sync even if last message fetch fails
+                }
+
+                // Store the last readable message BEFORE updating the conversation
+                // This ensures it's available when the Room query runs
+                if (lastReadableMessage != null && lastMessageTime != null) {
+                    try {
+                        // Insert or update the message
+                        messageDao.insert(lastReadableMessage)
+                        // Update entity with the correct timestamp
+                        entity = entity.copy(lastMessageAt = lastMessageTime)
+
+                        // Verify the message was actually saved
+                        val verifyMessage = messageDao.getMessage(lastReadableMessage.id)
+                        if (verifyMessage != null) {
+                            Log.d(TAG, "✅ Message verified in database: id=${lastReadableMessage.id}, content='${verifyMessage.content.take(30)}...'")
+                        } else {
+                            Log.e(TAG, "❌ Message not found after insert: id=${lastReadableMessage.id}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to insert last message", e)
+                    }
                 }
 
                 if (existing != null) {
                     // Conversation exists - update metadata but preserve consent and user preferences
+                    Log.d(TAG, "  [EXPIRATION DEBUG] Existing conversation found: existing.expiresAt=${existing.expiresAt}")
                     var finalConsent = existing.consent
 
                     // NEVER downgrade consent from ALLOWED (it's permanent once set)
@@ -258,13 +361,20 @@ class ConversationRepository @Inject constructor(
                         isPinned = existing.isPinned, // Preserve pinned state
                         isMuted = existing.isMuted, // Preserve muted state
                         isUnread = existing.isUnread, // Preserve unread state
-                        lastMessageAt = existing.lastMessageAt // Preserve lastMessageAt to maintain ordering
+                        lastMessageAt = lastMessageTime ?: existing.lastMessageAt // Use fetched last message time if available
                     )
+                    Log.d(TAG, "  [EXPIRATION DEBUG] Before insert: entity.expiresAt=${entity.expiresAt}")
                     conversationDao.insert(entity)
                     Log.d(
                         TAG,
-                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}', lastMessageAt=${existing.lastMessageAt}"
+                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}', lastMessageAt=${lastMessageTime ?: existing.lastMessageAt}"
                     )
+
+                    // Debug: Check if messages exist for this conversation
+                    val messageCount = messageDao.getMessageCount(conversation.id)
+                    val lastMessageDirect = messageDao.getLastMessageDirect(conversation.id)
+                    Log.d(TAG, "🔍 DEBUG: Conversation ${conversation.id} has $messageCount messages, last message: '${lastMessageDirect?.take(30)}'")
+
                 } else {
                     // New conversation - check XMTP consent state
                     val consentState =
@@ -354,6 +464,20 @@ class ConversationRepository @Inject constructor(
             Log.d(TAG, "Updated unread state for conversation: $conversationId to $isUnread")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update unread state", e)
+        }
+    }
+
+    suspend fun updateExpirationTime(conversationId: String, expiresAt: Long) {
+        try {
+            Log.d(TAG, "[EXPIRATION DEBUG] Calling DAO to update expiration: conversationId=$conversationId, expiresAt=$expiresAt")
+            conversationDao.updateExpirationTime(conversationId, expiresAt)
+            Log.d(TAG, "Updated expiration time for conversation: $conversationId to $expiresAt")
+
+            // Verify the update was successful
+            val updated = conversationDao.getConversationSync(conversationId)
+            Log.d(TAG, "[EXPIRATION DEBUG] After DAO update, conversation expiresAt=${updated?.expiresAt}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update expiration time", e)
         }
     }
 
@@ -526,6 +650,7 @@ class ConversationRepository @Inject constructor(
                                 TAG,
                                 "New group via stream - id=${conversation.id}, name='${entity.name}', inviteTag='${entity.inviteTag}', expiresAt=$expiresAt"
                             )
+                            Log.d(TAG, "  [EXPIRATION DEBUG] Stream: entity.expiresAt=${entity.expiresAt}")
 
                             // Check if this conversation already exists in database
                             val existingConsent = conversationDao.getConversationSync(conversation.id)?.consent
@@ -556,8 +681,8 @@ class ConversationRepository @Inject constructor(
                                     // Ensure the consent is also updated in the database
                                     updateConsent(conversation.id, ConsentState.ALLOWED)
 
-                                    // Do a full sync to ensure all data is up to date
-                                    syncConversations(inboxId)
+                                    // Don't do a full sync here - it causes all conversations to flicker
+                                    // The individual conversation is already inserted above
                                 } else {
                                     Log.d(
                                         TAG,
@@ -711,6 +836,44 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
+     * Delete expired conversations from the database immediately.
+     * This triggers the Room Flow to re-emit and update the UI.
+     * Call this when you detect expired conversations.
+     */
+    suspend fun cleanupExpiredConversations() {
+        try {
+            val currentTime = System.currentTimeMillis()
+            val expiredConversations = conversationDao.getExpiredConversations(currentTime)
+
+            if (expiredConversations.isEmpty()) {
+                Log.d(TAG, "cleanupExpiredConversations: No expired conversations found")
+                return
+            }
+
+            Log.d(TAG, "🔥 cleanupExpiredConversations: Found ${expiredConversations.size} expired conversations to delete")
+
+            for (conversation in expiredConversations) {
+                val timeExpired = currentTime - (conversation.expiresAt ?: 0)
+                Log.d(
+                    TAG,
+                    "  Deleting expired conversation ${conversation.id.take(8)}: " +
+                    "expiresAt=${conversation.expiresAt}, expired ${timeExpired}ms ago"
+                )
+
+                // Delete the conversation from database - this triggers Room Flow to re-emit
+                conversationDao.deleteConversation(conversation.id)
+
+                // Also delete all messages for this conversation
+                messageDao.deleteAllForConversation(conversation.id)
+            }
+
+            Log.d(TAG, "✅ cleanupExpiredConversations: Successfully deleted ${expiredConversations.size} expired conversations")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to cleanup expired conversations", e)
+        }
+    }
+
+    /**
      * Clean up inboxes that have expired conversations.
      * Call this periodically to remove "zombie" inboxes.
      */
@@ -765,6 +928,27 @@ class ConversationRepository @Inject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to cleanup expired inboxes", e)
+        }
+    }
+
+    /**
+     * Helper function to check if content looks like an invite code.
+     * Invite codes are typically base64url encoded protobufs that start with specific patterns.
+     */
+    private fun looksLikeInviteCode(content: String): Boolean {
+        val trimmed = content.trim()
+        return when {
+            // Contains * separators (iOS format)
+            trimmed.contains("*") && trimmed.replace("*", "")
+                .matches(Regex("^[A-Za-z0-9_-]+$")) -> true
+            // Starts with common protobuf prefixes when base64 encoded
+            trimmed.startsWith("Cn") || trimmed.startsWith("Cg") || trimmed.startsWith("Ch") -> {
+                val base64Chars = trimmed.count { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
+                base64Chars.toFloat() / trimmed.length > 0.95f
+            }
+            // Very long base64url string (likely encoded data)
+            trimmed.length > 200 && trimmed.matches(Regex("^[A-Za-z0-9_-]+$")) -> true
+            else -> false
         }
     }
 }
