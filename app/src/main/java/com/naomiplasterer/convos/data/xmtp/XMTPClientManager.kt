@@ -7,9 +7,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import org.xmtp.android.library.Client
 import org.xmtp.android.library.ClientOptions
 import org.xmtp.android.library.XMTPEnvironment
-import org.xmtp.android.library.codecs.AttachmentCodec
-import org.xmtp.android.library.codecs.ReactionCodec
-import org.xmtp.android.library.codecs.ReplyCodec
 import org.xmtp.android.library.messages.PrivateKeyBuilder
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,17 +20,6 @@ class XMTPClientManager @Inject constructor(
 ) {
     private val _clients = mutableMapOf<String, Client>()
     private val _activeInboxId = MutableStateFlow<String?>(null)
-
-    init {
-        registerCodecs()
-    }
-
-    private fun registerCodecs() {
-        Client.register(codec = AttachmentCodec())
-        Client.register(codec = ReactionCodec())
-        Client.register(codec = ReplyCodec())
-        Log.d(TAG, "Registered XMTP codecs: Attachment, Reaction, Reply")
-    }
 
     fun getClient(inboxId: String): Client? {
         return _clients[inboxId]

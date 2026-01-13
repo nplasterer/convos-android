@@ -201,7 +201,7 @@ class MessageRepository @Inject constructor(
                     }
 
                     else -> {
-                        // Regular text message
+                        // Regular text message or custom content type
                         val content = try {
                             val rawContent = decodedMessage.content<String>() ?: "[Empty message]"
 
@@ -217,8 +217,9 @@ class MessageRepository @Inject constructor(
 
                             rawContent
                         } catch (e: Exception) {
-                            Log.w(TAG, "  Failed to decode message content: ${e.message}", e)
-                            "[Unable to decode message]"
+                            Log.w(TAG, "  Failed to decode message content: ${e.message}, hiding from UI", e)
+                            // Hide undecoded messages from the UI instead of showing error text
+                            return@mapNotNull null
                         }
                         "text" to content
                     }
@@ -492,7 +493,7 @@ class MessageRepository @Inject constructor(
                             }
 
                             else -> {
-                                // Regular text message
+                                // Regular text message or custom content type
                                 val content = try {
                                     val rawContent =
                                         decodedMessage.content<String>() ?: "[Empty message]"
@@ -511,10 +512,11 @@ class MessageRepository @Inject constructor(
                                 } catch (e: Exception) {
                                     Log.w(
                                         TAG,
-                                        "  Failed to decode message content: ${e.message}",
+                                        "⏭️  SKIPPING MESSAGE - Failed to decode message content: ${e.message}, hiding from UI",
                                         e
                                     )
-                                    "[Unable to decode message]"
+                                    // Hide undecoded messages from the UI instead of showing error text
+                                    return@collect
                                 }
                                 "text" to content
                             }

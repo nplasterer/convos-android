@@ -224,19 +224,47 @@ class ConversationRepository @Inject constructor(
                             entity.description?.take(50)
                         }', imageUrl='${entity.imageUrl}', expiresAt=$expiresAt"
                     )
+                    Log.d(TAG, "  [EXPIRATION DEBUG] After setting from metadata: entity.expiresAt=${entity.expiresAt}")
                 }
+
+                // Skip expired conversations - don't insert/update them in the database
+                val currentTime = System.currentTimeMillis()
+                if (expiresAt != null && expiresAt <= currentTime) {
+                    Log.d(
+                        TAG,
+                        "🔥 SKIPPING EXPIRED CONVERSATION: ${conversation.id.take(8)}, expiresAt=$expiresAt, expired ${currentTime - expiresAt}ms ago"
+                    )
+                    // If it exists in database, delete it
+                    if (existing != null) {
+                        conversationDao.deleteConversation(conversation.id)
+                        messageDao.deleteAllForConversation(conversation.id)
+                        Log.d(TAG, "  Deleted expired conversation from database")
+                    }
+                    continue // Skip to next conversation
+                }
+
+                // Don't manually fetch and store last message during sync
+                // The message stream already handles inserting all messages in real-time
+                // The database query will automatically find the most recent message
 
                 if (existing != null) {
                     // Conversation exists - update metadata but preserve consent and user preferences
+                    Log.d(TAG, "  [EXPIRATION DEBUG] Existing conversation found: existing.expiresAt=${existing.expiresAt}")
                     var finalConsent = existing.consent
 
-                    // NEVER downgrade consent from ALLOWED (it's permanent once set)
+                    // NEVER change consent from ALLOWED or DENIED (both are permanent once set)
                     if (existing.consent == "allowed") {
                         Log.d(
                             TAG,
                             "Preserving consent=allowed for conversation ${conversation.id}"
                         )
                         finalConsent = "allowed"
+                    } else if (existing.consent == "denied") {
+                        Log.d(
+                            TAG,
+                            "Preserving consent=denied for conversation ${conversation.id} (user explicitly denied/deleted)"
+                        )
+                        finalConsent = "denied"
                     } else if (conversation is org.xmtp.android.library.Conversation.Group) {
                         // Check if this conversation has pending invite and should be upgraded to ALLOWED
                         // Use read-only check to avoid removing pending invite (stream needs it too)
@@ -258,13 +286,31 @@ class ConversationRepository @Inject constructor(
                         isPinned = existing.isPinned, // Preserve pinned state
                         isMuted = existing.isMuted, // Preserve muted state
                         isUnread = existing.isUnread, // Preserve unread state
-                        lastMessageAt = existing.lastMessageAt // Preserve lastMessageAt to maintain ordering
+                        lastMessageAt = existing.lastMessageAt // Preserve existing timestamp (stream updates it)
                     )
-                    conversationDao.insert(entity)
-                    Log.d(
-                        TAG,
-                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}', lastMessageAt=${existing.lastMessageAt}"
-                    )
+                    Log.d(TAG, "  [EXPIRATION DEBUG] Before insert: entity.expiresAt=${entity.expiresAt}")
+
+                    // Only update the database if something meaningful changed
+                    // This prevents unnecessary Room Flow emissions that cause message previews to disappear
+                    val hasChanges = existing.name != entity.name ||
+                            existing.description != entity.description ||
+                            existing.imageUrl != entity.imageUrl ||
+                            existing.consent != entity.consent ||
+                            existing.expiresAt != entity.expiresAt
+
+                    if (hasChanges) {
+                        conversationDao.insert(entity)
+                        Log.d(
+                            TAG,
+                            "Updated existing conversation with changes: ${conversation.id}, consent=$finalConsent, name='${entity.name}'"
+                        )
+                    } else {
+                        Log.d(
+                            TAG,
+                            "Skipped update for conversation ${conversation.id} - no meaningful changes detected"
+                        )
+                    }
+
                 } else {
                     // New conversation - check XMTP consent state
                     val consentState =
@@ -354,6 +400,20 @@ class ConversationRepository @Inject constructor(
             Log.d(TAG, "Updated unread state for conversation: $conversationId to $isUnread")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to update unread state", e)
+        }
+    }
+
+    suspend fun updateExpirationTime(conversationId: String, expiresAt: Long) {
+        try {
+            Log.d(TAG, "[EXPIRATION DEBUG] Calling DAO to update expiration: conversationId=$conversationId, expiresAt=$expiresAt")
+            conversationDao.updateExpirationTime(conversationId, expiresAt)
+            Log.d(TAG, "Updated expiration time for conversation: $conversationId to $expiresAt")
+
+            // Verify the update was successful
+            val updated = conversationDao.getConversationSync(conversationId)
+            Log.d(TAG, "[EXPIRATION DEBUG] After DAO update, conversation expiresAt=${updated?.expiresAt}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to update expiration time", e)
         }
     }
 
@@ -526,6 +586,7 @@ class ConversationRepository @Inject constructor(
                                 TAG,
                                 "New group via stream - id=${conversation.id}, name='${entity.name}', inviteTag='${entity.inviteTag}', expiresAt=$expiresAt"
                             )
+                            Log.d(TAG, "  [EXPIRATION DEBUG] Stream: entity.expiresAt=${entity.expiresAt}")
 
                             // Check if this conversation already exists in database
                             val existingConsent = conversationDao.getConversationSync(conversation.id)?.consent
@@ -556,8 +617,8 @@ class ConversationRepository @Inject constructor(
                                     // Ensure the consent is also updated in the database
                                     updateConsent(conversation.id, ConsentState.ALLOWED)
 
-                                    // Do a full sync to ensure all data is up to date
-                                    syncConversations(inboxId)
+                                    // Don't do a full sync here - it causes all conversations to flicker
+                                    // The individual conversation is already inserted above
                                 } else {
                                     Log.d(
                                         TAG,
@@ -711,6 +772,44 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
+     * Delete expired conversations from the database immediately.
+     * This triggers the Room Flow to re-emit and update the UI.
+     * Call this when you detect expired conversations.
+     */
+    suspend fun cleanupExpiredConversations() {
+        try {
+            val currentTime = System.currentTimeMillis()
+            val expiredConversations = conversationDao.getExpiredConversations(currentTime)
+
+            if (expiredConversations.isEmpty()) {
+                Log.d(TAG, "cleanupExpiredConversations: No expired conversations found")
+                return
+            }
+
+            Log.d(TAG, "🔥 cleanupExpiredConversations: Found ${expiredConversations.size} expired conversations to delete")
+
+            for (conversation in expiredConversations) {
+                val timeExpired = currentTime - (conversation.expiresAt ?: 0)
+                Log.d(
+                    TAG,
+                    "  Deleting expired conversation ${conversation.id.take(8)}: " +
+                    "expiresAt=${conversation.expiresAt}, expired ${timeExpired}ms ago"
+                )
+
+                // Delete the conversation from database - this triggers Room Flow to re-emit
+                conversationDao.deleteConversation(conversation.id)
+
+                // Also delete all messages for this conversation
+                messageDao.deleteAllForConversation(conversation.id)
+            }
+
+            Log.d(TAG, "✅ cleanupExpiredConversations: Successfully deleted ${expiredConversations.size} expired conversations")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to cleanup expired conversations", e)
+        }
+    }
+
+    /**
      * Clean up inboxes that have expired conversations.
      * Call this periodically to remove "zombie" inboxes.
      */
@@ -765,6 +864,27 @@ class ConversationRepository @Inject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to cleanup expired inboxes", e)
+        }
+    }
+
+    /**
+     * Helper function to check if content looks like an invite code.
+     * Invite codes are typically base64url encoded protobufs that start with specific patterns.
+     */
+    private fun looksLikeInviteCode(content: String): Boolean {
+        val trimmed = content.trim()
+        return when {
+            // Contains * separators (iOS format)
+            trimmed.contains("*") && trimmed.replace("*", "")
+                .matches(Regex("^[A-Za-z0-9_-]+$")) -> true
+            // Starts with common protobuf prefixes when base64 encoded
+            trimmed.startsWith("Cn") || trimmed.startsWith("Cg") || trimmed.startsWith("Ch") -> {
+                val base64Chars = trimmed.count { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
+                base64Chars.toFloat() / trimmed.length > 0.95f
+            }
+            // Very long base64url string (likely encoded data)
+            trimmed.length > 200 && trimmed.matches(Regex("^[A-Za-z0-9_-]+$")) -> true
+            else -> false
         }
     }
 }

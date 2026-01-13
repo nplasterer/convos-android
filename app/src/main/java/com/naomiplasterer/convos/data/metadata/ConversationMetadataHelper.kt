@@ -95,6 +95,12 @@ object ConversationMetadataHelper {
         metadata: ConversationMetadataProtos.ConversationCustomMetadata
     ): Result<Unit> {
         return try {
+            Log.d(TAG, "[EXPIRATION DEBUG] About to store metadata:")
+            Log.d(TAG, "  tag=${metadata.tag}")
+            Log.d(TAG, "  hasExpiresAtUnix=${metadata.hasExpiresAtUnix()}")
+            Log.d(TAG, "  expiresAtUnix=${if (metadata.hasExpiresAtUnix()) metadata.expiresAtUnix else "null"}")
+            Log.d(TAG, "  profiles count=${metadata.profilesCount}")
+
             val encoded = encodeMetadata(metadata)
             // Store in appData as base64url encoded string
             group.group.updateAppData(encoded)

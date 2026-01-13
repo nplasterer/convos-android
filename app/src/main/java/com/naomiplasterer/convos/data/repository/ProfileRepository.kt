@@ -123,6 +123,13 @@ class ProfileRepository @Inject constructor(
                         addProfiles(updatedProfile)
                         Log.d(TAG, "Added new profile to metadata")
                     }
+
+                    // CRITICAL: Explicitly preserve expiresAtUnix if it exists
+                    // This prevents profile updates from clearing the conversation expiration
+                    if (currentMetadata.hasExpiresAtUnix()) {
+                        expiresAtUnix = currentMetadata.expiresAtUnix
+                        Log.d(TAG, "Preserved expiresAtUnix=${currentMetadata.expiresAtUnix} in profile update")
+                    }
                 }
                 .build()
 

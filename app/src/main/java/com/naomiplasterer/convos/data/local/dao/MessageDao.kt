@@ -71,6 +71,18 @@ interface MessageDao {
         ) latest ON m.conversationId = latest.conversationId AND m.sentAt = latest.maxSentAt
     """)
     fun getLastMessages(conversationIds: List<String>): Flow<List<MessageEntity>>
+
+    @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId")
+    suspend fun getMessageCount(conversationId: String): Int
+
+    @Query("""
+        SELECT content FROM messages
+        WHERE conversationId = :conversationId
+          AND contentType != 'update'
+        ORDER BY sentAt DESC
+        LIMIT 1
+    """)
+    suspend fun getLastMessageDirect(conversationId: String): String?
 }
 
 data class LastMessageInfo(
