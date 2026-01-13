@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -117,7 +118,8 @@ fun ConversationsScreen(
                             viewModel.selectConversation(it.id)
                             onConversationClick(it.id)
                         },
-                        onDeleteClick = { viewModel.deleteConversation(it.id) }
+                        onDeleteClick = { viewModel.deleteConversation(it.id) },
+                        onRefresh = { viewModel.syncConversations() }
                     )
                 }
 
@@ -134,7 +136,8 @@ fun ConversationsScreen(
                             onConversationClick(it.id)
                         },
                         onDeleteClick = { viewModel.deleteConversation(it.id) },
-                        isSyncing = true
+                        isSyncing = true,
+                        onRefresh = { viewModel.syncConversations() }
                     )
                 }
 
@@ -149,6 +152,7 @@ fun ConversationsScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConversationsList(
     conversations: List<Conversation>,
@@ -157,13 +161,14 @@ private fun ConversationsList(
     showCTA: Boolean = false,
     onStartConvo: () -> Unit = {},
     onJoinConvo: () -> Unit = {},
-    isSyncing: Boolean = false
+    isSyncing: Boolean = false,
+    onRefresh: () -> Unit = {}
 ) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        if (isSyncing) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-
+    PullToRefreshBox(
+        isRefreshing = isSyncing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = if (showCTA) 0.dp else Spacing.step2x)

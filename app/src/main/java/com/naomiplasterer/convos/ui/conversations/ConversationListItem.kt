@@ -130,16 +130,6 @@ fun ConversationListItem(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
-                        } else {
-                            // Show empty state or placeholder
-                            Text(
-                                text = " • No messages yet",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
                         }
 
                         if (conversation.isUnread) {

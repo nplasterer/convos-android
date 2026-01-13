@@ -227,106 +227,9 @@ class ConversationRepository @Inject constructor(
                     Log.d(TAG, "  [EXPIRATION DEBUG] After setting from metadata: entity.expiresAt=${entity.expiresAt}")
                 }
 
-                // Fetch last readable message using XMTP SDK
-                // This populates the last message preview without requiring a full message sync
-                var lastMessageTime: Long? = null
-                var lastReadableMessage: com.naomiplasterer.convos.data.local.entity.MessageEntity? = null
-                try {
-                    // Fetch recent messages to find the first readable one
-                    val recentMessages = when (conversation) {
-                        is XMTPConversation.Group -> conversation.group.messages(limit = 20) // Fetch more to find readable ones
-                        is XMTPConversation.Dm -> conversation.dm.messages(limit = 20)
-                        else -> emptyList()
-                    }
-
-                    Log.d(TAG, "Fetched ${recentMessages.size} recent messages for conversation ${conversation.id}")
-
-                    // Find the first readable message (skip system messages)
-                    val skipTypes = listOf(
-                        "explode_settings",
-                        "membership_change",
-                        "group_updated",
-                        "update",
-                        "reaction",
-                        "reply"
-                    )
-
-                    for (message in recentMessages) {
-                        val sentAtMs = message.sentAtNs / 1_000_000
-
-                        // Check content type
-                        val contentType = try {
-                            message.encodedContent.type.typeId
-                        } catch (e: Exception) {
-                            "text"
-                        }
-
-                        // Skip non-readable messages
-                        val shouldSkip = skipTypes.any { contentType.contains(it, ignoreCase = true) }
-                        if (shouldSkip) {
-                            Log.d(TAG, "Skipping message type: $contentType")
-                            continue
-                        }
-
-                        // Try to decode message content
-                        val messageContent = try {
-                            message.content<String>() ?: ""
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to decode message content (type: $contentType)", e)
-                            continue // Try next message
-                        }
-
-                        // Skip if it looks like an invite code or is empty
-                        if (messageContent.isBlank() || looksLikeInviteCode(messageContent)) {
-                            Log.d(TAG, "Skipping empty or invite code message")
-                            continue
-                        }
-
-                        // Found a readable message! This will be our last message
-                        lastMessageTime = sentAtMs
-                        lastReadableMessage = com.naomiplasterer.convos.data.local.entity.MessageEntity(
-                            id = message.id,
-                            conversationId = conversation.id,
-                            senderInboxId = message.senderInboxId,
-                            contentType = "text",
-                            content = messageContent,
-                            status = "sent",
-                            sentAt = sentAtMs,
-                            deliveredAt = null
-                        )
-
-                        Log.d(
-                            TAG,
-                            "Found last readable message for conversation ${conversation.id}: '${messageContent.take(30)}...' at $sentAtMs"
-                        )
-                        break // Stop after finding first readable message
-                    }
-
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to fetch last message for conversation ${conversation.id}", e)
-                    // Continue with sync even if last message fetch fails
-                }
-
-                // Store the last readable message BEFORE updating the conversation
-                // This ensures it's available when the Room query runs
-                if (lastReadableMessage != null && lastMessageTime != null) {
-                    try {
-                        // Insert or update the message
-                        messageDao.insert(lastReadableMessage)
-                        // Update entity with the correct timestamp
-                        entity = entity.copy(lastMessageAt = lastMessageTime)
-
-                        // Verify the message was actually saved
-                        val verifyMessage = messageDao.getMessage(lastReadableMessage.id)
-                        if (verifyMessage != null) {
-                            Log.d(TAG, "✅ Message verified in database: id=${lastReadableMessage.id}, content='${verifyMessage.content.take(30)}...'")
-                        } else {
-                            Log.e(TAG, "❌ Message not found after insert: id=${lastReadableMessage.id}")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ Failed to insert last message", e)
-                    }
-                }
+                // Don't manually fetch and store last message during sync
+                // The message stream already handles inserting all messages in real-time
+                // The database query will automatically find the most recent message
 
                 if (existing != null) {
                     // Conversation exists - update metadata but preserve consent and user preferences
@@ -361,19 +264,30 @@ class ConversationRepository @Inject constructor(
                         isPinned = existing.isPinned, // Preserve pinned state
                         isMuted = existing.isMuted, // Preserve muted state
                         isUnread = existing.isUnread, // Preserve unread state
-                        lastMessageAt = lastMessageTime ?: existing.lastMessageAt // Use fetched last message time if available
+                        lastMessageAt = existing.lastMessageAt // Preserve existing timestamp (stream updates it)
                     )
                     Log.d(TAG, "  [EXPIRATION DEBUG] Before insert: entity.expiresAt=${entity.expiresAt}")
-                    conversationDao.insert(entity)
-                    Log.d(
-                        TAG,
-                        "Updated existing conversation: ${conversation.id}, consent=$finalConsent, name='${entity.name}', lastMessageAt=${lastMessageTime ?: existing.lastMessageAt}"
-                    )
 
-                    // Debug: Check if messages exist for this conversation
-                    val messageCount = messageDao.getMessageCount(conversation.id)
-                    val lastMessageDirect = messageDao.getLastMessageDirect(conversation.id)
-                    Log.d(TAG, "🔍 DEBUG: Conversation ${conversation.id} has $messageCount messages, last message: '${lastMessageDirect?.take(30)}'")
+                    // Only update the database if something meaningful changed
+                    // This prevents unnecessary Room Flow emissions that cause message previews to disappear
+                    val hasChanges = existing.name != entity.name ||
+                            existing.description != entity.description ||
+                            existing.imageUrl != entity.imageUrl ||
+                            existing.consent != entity.consent ||
+                            existing.expiresAt != entity.expiresAt
+
+                    if (hasChanges) {
+                        conversationDao.insert(entity)
+                        Log.d(
+                            TAG,
+                            "Updated existing conversation with changes: ${conversation.id}, consent=$finalConsent, name='${entity.name}'"
+                        )
+                    } else {
+                        Log.d(
+                            TAG,
+                            "Skipped update for conversation ${conversation.id} - no meaningful changes detected"
+                        )
+                    }
 
                 } else {
                     // New conversation - check XMTP consent state
