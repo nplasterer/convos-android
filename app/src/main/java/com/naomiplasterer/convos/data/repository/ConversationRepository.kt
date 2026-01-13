@@ -227,6 +227,22 @@ class ConversationRepository @Inject constructor(
                     Log.d(TAG, "  [EXPIRATION DEBUG] After setting from metadata: entity.expiresAt=${entity.expiresAt}")
                 }
 
+                // Skip expired conversations - don't insert/update them in the database
+                val currentTime = System.currentTimeMillis()
+                if (expiresAt != null && expiresAt <= currentTime) {
+                    Log.d(
+                        TAG,
+                        "🔥 SKIPPING EXPIRED CONVERSATION: ${conversation.id.take(8)}, expiresAt=$expiresAt, expired ${currentTime - expiresAt}ms ago"
+                    )
+                    // If it exists in database, delete it
+                    if (existing != null) {
+                        conversationDao.deleteConversation(conversation.id)
+                        messageDao.deleteAllForConversation(conversation.id)
+                        Log.d(TAG, "  Deleted expired conversation from database")
+                    }
+                    continue // Skip to next conversation
+                }
+
                 // Don't manually fetch and store last message during sync
                 // The message stream already handles inserting all messages in real-time
                 // The database query will automatically find the most recent message
