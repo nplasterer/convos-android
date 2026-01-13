@@ -10,6 +10,7 @@ import com.naomiplasterer.convos.data.repository.MessageRepository
 import com.naomiplasterer.convos.data.session.SessionManager
 import com.naomiplasterer.convos.data.xmtp.XMTPClientManager
 import com.naomiplasterer.convos.domain.model.Conversation
+import com.naomiplasterer.convos.domain.model.ConsentState
 import com.naomiplasterer.convos.domain.model.Message
 import com.naomiplasterer.convos.domain.model.MessageContent
 import com.naomiplasterer.convos.domain.model.meaningfullyEquals
@@ -433,16 +434,28 @@ class ConversationViewModel @Inject constructor(
                 val success = sendExplodeSettings(expiresAt)
 
                 if (success) {
-                    // Update local conversation with expiration time
-                    updateConversationExpiration(expiresAt.time)
-
-                    // Start countdown timer
-                    startExpirationCountdown(expiresAt.time)
+                    Log.d(TAG, "🔥 Explode sent successfully - deleting conversation immediately for sender")
 
                     _explodeState.value = ExplodeState.EXPLODED
 
-                    // Wait for animation, then navigate back
+                    // Wait for explosion animation
                     delay(2000)
+
+                    // For the sender, set consent to DENIED immediately to hide it permanently
+                    // This prevents it from re-appearing if sync fetches it again from the network
+                    // Other participants will see it expire after 30 seconds
+                    try {
+                        val currentState = _uiState.value
+                        if (currentState is ConversationUiState.Success) {
+                            // Set consent to DENIED - this hides it from the conversation list
+                            // Even if sync re-fetches it, it won't show (DAO filters for consent = 'allowed')
+                            conversationRepository.updateConsent(conversationId, ConsentState.DENIED)
+                            Log.d(TAG, "✅ Sender's conversation hidden immediately (consent=DENIED)")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Failed to hide sender's conversation after explode", e)
+                    }
+
                     _explodeState.value = ExplodeState.READY
 
                     // Navigate back to conversation list

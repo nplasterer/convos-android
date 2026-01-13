@@ -111,7 +111,10 @@ class ConversationsViewModel @Inject constructor(
 
             // Start observing database IMMEDIATELY (matches iOS ValueObservation pattern)
             // This will show cached conversations right away if they exist
-            observeAllConversations(allInboxIds)
+            // Launch in separate coroutine so it doesn't block network sync
+            viewModelScope.launch {
+                observeAllConversations(allInboxIds)
+            }
 
             // Run network sync in parallel (don't block database observation)
             viewModelScope.launch {

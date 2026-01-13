@@ -252,13 +252,19 @@ class ConversationRepository @Inject constructor(
                     Log.d(TAG, "  [EXPIRATION DEBUG] Existing conversation found: existing.expiresAt=${existing.expiresAt}")
                     var finalConsent = existing.consent
 
-                    // NEVER downgrade consent from ALLOWED (it's permanent once set)
+                    // NEVER change consent from ALLOWED or DENIED (both are permanent once set)
                     if (existing.consent == "allowed") {
                         Log.d(
                             TAG,
                             "Preserving consent=allowed for conversation ${conversation.id}"
                         )
                         finalConsent = "allowed"
+                    } else if (existing.consent == "denied") {
+                        Log.d(
+                            TAG,
+                            "Preserving consent=denied for conversation ${conversation.id} (user explicitly denied/deleted)"
+                        )
+                        finalConsent = "denied"
                     } else if (conversation is org.xmtp.android.library.Conversation.Group) {
                         // Check if this conversation has pending invite and should be upgraded to ALLOWED
                         // Use read-only check to avoid removing pending invite (stream needs it too)
